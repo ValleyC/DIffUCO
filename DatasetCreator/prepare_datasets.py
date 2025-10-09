@@ -19,7 +19,9 @@ parser.add_argument('--licence_path', default="/system/user/sanokows/", type = s
 parser.add_argument('--seed', default=[123], type = int, help='Define dataset seed', nargs = "+")
 parser.add_argument('--parent', default=False, type = bool, help='use parent directory or not')
 parser.add_argument('--save', default=False, type = bool, help='save the entire dataset in a pickle file or not')
-parser.add_argument('--gurobi_solve', default=True, type = bool, help='whether to solve instances with gurobi or not')
+
+parser.add_argument('--gurobi_solve', action='store_true', help='whether to solve instances with gurobi or not')
+parser.add_argument('--no-gurobi_solve', dest='gurobi_solve', action='store_false')
 parser.add_argument('--datasets', default=['RB_iid_small'], choices = dataset_choices, help='Define the dataset', nargs="+")
 parser.add_argument('--diff_ps', default=False, type = bool, help='')
 parser.add_argument('--problems', default=['MIS'], choices = ["MIS", "MVC", "MaxCl", "MaxCut", "MDS", "TSP", "IsingModel", "SpinGlass"], help='Define the CO problem', nargs="+")

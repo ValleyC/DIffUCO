@@ -57,8 +57,7 @@ DatasetCreator/README.md
 
 To run an experiment on the created dataset (see above) do the following:
 ```
-python argparse_ray_main.py --lrs 0.002 --GPUs 0 --n_GNN_layers 8 --temps 0.6 --IsingMode RB_iid_100 --EnergyFunction MIS --N_anneal 2000 
---n_diffusion_steps 3 --batch_size 20 --n_basis_states 10 --noise_potential bernoulli --project_name FirstRuns --seed 123 
+python argparse_ray_main.py --lrs 0.002 --GPUs 0 --n_GNN_layers 8 --temps 0.6 --IsingMode RB_iid_100 --EnergyFunction MIS --N_anneal 2000 --n_diffusion_steps 3 --batch_size 20 --n_basis_states 10 --noise_potential bernoulli --project_name FirstRuns --seed 123 
 ```
 
 ### parameter explanation
@@ -80,11 +79,17 @@ Here, you have to specify the mini-batch size for the inner loops steps within P
 When running DiffUCO with `--n_diffusion_steps A` and `--n_basis_states B` you have to set `--minib_diff_steps X` and `--minib_basis_states Y` 
 so that `A/X` and ` B/Y` are integers.
 
+Example:
+```
+python argparse_ray_main.py --lrs 0.002 --GPUs 0 --n_GNN_layers 8 --temps 0.6 --IsingMode BA_small --EnergyFunction MIS --N_anneal 2000 --n_diffusion_steps 30 --batch_size 20 --n_basis_states 10 --noise_potential bernoulli --project_name FirstRuns --seed 123 --train_mode PPO --minib_diff_steps 10 --minib_basis_states 5
+```
 
 ### SDDS: fKL w/ MC
 Alternatively, you can run DiffUCO with more steps by setting `--train_mode Forward_KL` when running python `argparse_ray_main.py`.
-(This has not been tested for a while.)
-
+Example:
+```
+python argparse_ray_main.py --lrs 0.002 --GPUs 0 --n_GNN_layers 8 --temps 0.6 --IsingMode BA_small --EnergyFunction MIS --N_anneal 2000 --n_diffusion_steps 30 --batch_size 20 --n_basis_states 10 --noise_potential bernoulli --project_name FirstRuns --seed 123 --train_mode Forward_KL --minib_diff_steps 10 --minib_basis_states 5
+```
 
 ### To evaluate the model use "ConditionalExpectation.py".
 
