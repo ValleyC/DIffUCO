@@ -199,11 +199,28 @@ def evaluate_instance(trainer, instance_data, instance_id):
         )
 
         # Extract generated positions
-        # log_dict["X_0"] has shape [n_nodes, n_basis_states, continuous_dim]
-        X_0 = log_dict["X_0"]
+        # Check different possible locations for X_0
+        if "metrics" in log_dict and "X_0" in log_dict["metrics"]:
+            X_0 = log_dict["metrics"]["X_0"]
+        elif "X_0" in log_dict:
+            X_0 = log_dict["X_0"]
+        else:
+            raise ValueError(f"Cannot find X_0 in log_dict. Keys: {log_dict.keys()}")
 
-        # Take all nodes, first basis state
-        generated_positions = np.array(X_0[:, 0, :])  # [n_nodes, 2]
+        # Debug: print shape
+        print(f"  X_0 shape: {X_0.shape}")
+
+        # Handle different possible shapes
+        if len(X_0.shape) == 3:
+            # [n_nodes, n_basis_states, continuous_dim]
+            generated_positions = np.array(X_0[:, 0, :])  # Take first basis state
+        elif len(X_0.shape) == 2:
+            # [n_nodes, continuous_dim] - already in correct shape
+            generated_positions = np.array(X_0)
+        else:
+            raise ValueError(f"Unexpected X_0 shape: {X_0.shape}")
+
+        print(f"  Generated positions shape: {generated_positions.shape}")
 
         # Compute generated HPWL
         generated_hpwl = compute_hpwl(generated_positions, graph)
