@@ -2,9 +2,10 @@ from .AnnealedNoise import AnnealedNoiseDistr
 from .BernoulliNoise import BernoulliNoiseDistr
 from .CategoricalNoise import CategoricalNoseDistr
 from .CombinedNoiseDistr import CombinedNoiseDistr
+from .GaussianNoise import GaussianNoiseDistr
 
 ### TODO implement mixture of AnnealedNoise and Bernoulli Noise
-noise_distribution_registry = {"annealed_obj": AnnealedNoiseDistr, "bernoulli": BernoulliNoiseDistr, "categorical": CategoricalNoseDistr, "combined": CombinedNoiseDistr}
+noise_distribution_registry = {"annealed_obj": AnnealedNoiseDistr, "bernoulli": BernoulliNoiseDistr, "categorical": CategoricalNoseDistr, "combined": CombinedNoiseDistr, "gaussian": GaussianNoiseDistr}
 
 
 

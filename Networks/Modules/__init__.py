@@ -4,9 +4,10 @@ from Networks.Modules.GNNModules.TSPTransformer import TSPTransformer
 from Networks.Modules.GNNModules.U_Net import UNet
 from Networks.Modules.HeadModules.RLHead import RLHeadModuleTSP, RLHeadModule_agg_before, RLHeadModule_agg_after
 from Networks.Modules.HeadModules.NormalHead import NormalHeadModule,TransformerHead
+from Networks.Modules.HeadModules.ContinuousHead import ContinuousHead, ContinuousHeadChip
 ### TODO implement mixture of AnnealedNoise and Bernoulli Noise
 GNNModel_registry = {"normal": EncodeProcessDecode, "TSPModel": TSPModel, "Transformer":TSPTransformer, "UNet": UNet}
-OutputHead_registry = {"RLHead": RLHeadModule_agg_before, "RLHead_aggr": RLHeadModule_agg_after, "RLHeadTSP": RLHeadModuleTSP, "NormalHead": NormalHeadModule, "TransformerHead": TransformerHead}
+OutputHead_registry = {"RLHead": RLHeadModule_agg_before, "RLHead_aggr": RLHeadModule_agg_after, "RLHeadTSP": RLHeadModuleTSP, "NormalHead": NormalHeadModule, "TransformerHead": TransformerHead, "ContinuousHead": ContinuousHead, "ContinuousHeadChip": ContinuousHeadChip}
 
 
 def get_GNN_model(Model_name, train_mode):
