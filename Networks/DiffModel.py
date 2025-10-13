@@ -319,13 +319,11 @@ class DiffModel(nn.Module):
 			# log N(x | mu, sigma^2) = -0.5 * [(x-mu)^2/sigma^2 + log(sigma^2) + log(2*pi)]
 			# For N(0, I): log N(x | 0, I) = -0.5 * [x^2 + log(2*pi)]
 			log_p_per_dim = -0.5 * (X_T**2 + jnp.log(2 * jnp.pi))  # (num_nodes, n_basis_states, continuous_dim)
-			log_p_X_T_per_node = jnp.sum(log_p_per_dim, axis=-1)  # Sum over continuous_dim
+			log_p_X_T_per_node = jnp.sum(log_p_per_dim, axis=-1)  # Sum over continuous_dim -> (num_nodes, n_basis_states)
 
-			# Average over n_basis_states? Or just take one?
-			# Based on discrete code, seems like we're treating each basis state separately
-			# For now, let's sum over basis states dimension
-			log_p_X_T_per_node = jnp.sum(log_p_X_T_per_node, axis=-1)  # (num_nodes,)
-
+			# IMPORTANT: Keep the basis_states dimension!
+			# Each basis state has independent log probability
+			# Shape should be (num_nodes, n_basis_states) going into __get_log_prob
 			log_p_X_T = self.__get_log_prob(log_p_X_T_per_node, node_graph_idx, n_graph)
 		else:
 			# Discrete mode: original implementation
