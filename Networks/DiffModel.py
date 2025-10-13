@@ -48,7 +48,7 @@ class DiffModel(nn.Module):
 		else:
 			dtype = jnp.bfloat16
 
-		GNNModel, HeadModel = get_GNN_model(self.EncoderModel, self.train_mode)
+		GNNModel, HeadModel = get_GNN_model(self.EncoderModel, self.train_mode, self.continuous_dim)
 		if(self.EncoderModel != "UNet"):
 			self.encode_process_decode = GNNModel(dtype = dtype, n_features_list_nodes=self.n_features_list_nodes,
 																 n_features_list_edges=self.n_features_list_edges,
@@ -76,7 +76,13 @@ class DiffModel(nn.Module):
 																 n_layers=self.n_message_passes
 																 )
 
-		self.HeadModel = HeadModel(n_features_list_prob=self.n_features_list_prob, dtype = dtype)
+		# Instantiate head model with appropriate parameters
+		if self.continuous_dim > 0:
+			# ContinuousHead needs continuous_dim parameter
+			self.HeadModel = HeadModel(continuous_dim=self.continuous_dim, dtype=dtype)
+		else:
+			# Discrete heads need n_features_list_prob
+			self.HeadModel = HeadModel(n_features_list_prob=self.n_features_list_prob, dtype=dtype)
 
 		self.__vmap_get_log_probs = jax.vmap(self.__get_log_prob, in_axes=(0, None, None), out_axes=(0))
 		self.vamp_get_sinusoidal_positional_encoding = jax.vmap(get_sinusoidal_positional_encoding, in_axes=(0, None, None))

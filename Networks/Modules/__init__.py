@@ -10,16 +10,30 @@ GNNModel_registry = {"normal": EncodeProcessDecode, "TSPModel": TSPModel, "Trans
 OutputHead_registry = {"RLHead": RLHeadModule_agg_before, "RLHead_aggr": RLHeadModule_agg_after, "RLHeadTSP": RLHeadModuleTSP, "NormalHead": NormalHeadModule, "TransformerHead": TransformerHead, "ContinuousHead": ContinuousHead, "ContinuousHeadChip": ContinuousHeadChip}
 
 
-def get_GNN_model(Model_name, train_mode):
+def get_GNN_model(Model_name, train_mode, continuous_dim=0):
+    """
+    Get GNN model and appropriate output head.
 
+    Args:
+        Model_name: GNN architecture name
+        train_mode: Training mode (PPO, REINFORCE, etc.)
+        continuous_dim: If > 0, use continuous head for continuous outputs (e.g., chip placement)
+
+    Returns:
+        GNNModel, OutputHead
+    """
     if(Model_name in GNNModel_registry.keys()):
         GNNModel = GNNModel_registry[Model_name]
     else:
         raise ValueError(f"GNN model {Model_name} is not implemented")
 
-
-    Head_name = ""
-    if(train_mode == "PPO"):
+    # IMPORTANT: Check continuous_dim first!
+    # For continuous problems (like chip placement), always use ContinuousHead
+    if continuous_dim > 0:
+        Head_name = "ContinuousHead"
+        print(f"Using ContinuousHead for continuous_dim={continuous_dim}")
+    # For discrete problems, select head based on train_mode and model
+    elif(train_mode == "PPO"):
         if (Model_name == "Transformer"):
             Head_name = "RLHeadTSP"
         else:
