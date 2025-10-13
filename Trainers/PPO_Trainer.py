@@ -300,12 +300,26 @@ class PPO(Base):
                                                  batched_key)
 
         X_next = out_dict["X_next"]
-        spin_log_probs = out_dict["spin_log_probs"]
         state_log_probs = out_dict["state_log_probs"]
-        spin_logits_next = out_dict["spin_logits"]
         graph_log_prob = out_dict["graph_log_prob"]
         Values = out_dict["Values"]
         rand_node_features = out_dict["rand_node_features"]
+
+        # Handle discrete vs continuous outputs
+        # For discrete: out_dict has "spin_log_probs" and "spin_logits"
+        # For continuous: out_dict has "position_log_probs", "position_mean", "position_log_var"
+        if "spin_log_probs" in out_dict:
+            # Discrete mode
+            spin_log_probs = out_dict["spin_log_probs"]
+            spin_logits_next = out_dict["spin_logits"]
+        elif "position_log_probs" in out_dict:
+            # Continuous mode
+            spin_log_probs = out_dict["position_log_probs"]
+            # For continuous, we store position_mean as "spin_logits_next" for compatibility
+            # (it's not actually used in the training loop, just stored for logging)
+            spin_logits_next = out_dict.get("position_mean", None)
+        else:
+            raise ValueError("Output dict missing log probs (neither spin_log_probs nor position_log_probs found)")
 
         scan_dict["rand_node_features_diff_steps"] = scan_dict["rand_node_features_diff_steps"].at[i].set(rand_node_features)
 
@@ -327,10 +341,10 @@ class PPO(Base):
         scan_dict["X_prev"] = X_prev
         scan_dict["step"] += 1
 
-        out_dict = {}
-        out_dict["spin_log_probs"] = spin_log_probs
-        out_dict["spin_logits_next"] = spin_logits_next
-        return scan_dict, out_dict
+        out_dict_return = {}
+        out_dict_return["spin_log_probs"] = spin_log_probs
+        out_dict_return["spin_logits_next"] = spin_logits_next
+        return scan_dict, out_dict_return
 
     @partial(jax.jit, static_argnums=(0,6))
     def _environment_steps_scan(self, params, graphs, energy_graph_batch, T, key, mode):
@@ -348,8 +362,14 @@ class PPO(Base):
 
         n_graphs = energy_graph_batch.n_node.shape[0]
 
+        # Determine state shape - continuous vs discrete
+        # For discrete: X_prev shape is [num_nodes, N_basis_states, 1]
+        # For continuous: X_prev shape is [num_nodes, N_basis_states, continuous_dim]
+        # We use the last dimension of X_prev to determine the state dimension
+        state_dim = X_prev.shape[-1] if len(X_prev.shape) == 3 else 1
+
         log_policies = jnp.zeros((overall_diffusion_steps, n_graphs, X_prev.shape[1]), dtype=jnp.float32)
-        Xs_over_different_steps = jnp.zeros((overall_diffusion_steps + 1, X_prev.shape[0], X_prev.shape[1], 1))
+        Xs_over_different_steps = jnp.zeros((overall_diffusion_steps + 1, X_prev.shape[0], X_prev.shape[1], state_dim))
         prob_over_diff_steps = jnp.zeros((overall_diffusion_steps + 1,), dtype=jnp.float32)
         noise_rewards = jnp.zeros((overall_diffusion_steps , n_graphs, X_prev.shape[1]), dtype=jnp.float32)
         entropy_rewards = jnp.zeros((overall_diffusion_steps , n_graphs, X_prev.shape[1]), dtype=jnp.float32)
@@ -357,8 +377,20 @@ class PPO(Base):
         rand_node_features_diff_steps = jnp.zeros(
             (overall_diffusion_steps, X_prev.shape[0], X_prev.shape[1], self.n_random_node_features), dtype=jnp.float32)
 
-        prob_over_diff_steps = prob_over_diff_steps.at[0].set(1/self.n_bernoulli_features)
-        Xs_over_different_steps = Xs_over_different_steps.at[0].set(X_prev)
+        # For discrete: 1/n_bernoulli_features
+        # For continuous: approximate "uniform" probability (use 1.0 as placeholder)
+        initial_prob = 1/self.n_bernoulli_features if self.n_bernoulli_features > 1 else 1.0
+        prob_over_diff_steps = prob_over_diff_steps.at[0].set(initial_prob)
+
+        # Ensure X_prev has compatible shape for storage
+        if len(X_prev.shape) == 2:
+            # Continuous without middle dimension: [num_nodes, continuous_dim]
+            # Need to add basis_states dimension: [num_nodes, 1, continuous_dim]
+            X_prev_to_store = jnp.expand_dims(X_prev, axis=1)
+        else:
+            X_prev_to_store = X_prev
+
+        Xs_over_different_steps = Xs_over_different_steps.at[0].set(X_prev_to_store)
 
 
         node_gr_idx, n_graph, total_num_nodes = self._compute_aggr_utils(energy_graph_batch)

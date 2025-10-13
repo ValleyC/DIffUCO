@@ -61,20 +61,24 @@ class ChipDatasetGenerator(BaseDatasetGenerator):
             "densities": [],
             "Energies": [],  # HPWL
             "compl_H_graphs": [],
+            "gs_bins": [],  # Placeholder for compatibility (continuous doesn't have ground truth bins)
         }
 
         for idx in tqdm(range(self.graph_config[f"n_{self.mode}"])):
             # Generate one chip placement instance
-            positions, data, density, hpwl = self.sample_chip_instance_unsupervised()
+            positions, jraph_data, density, hpwl = self.sample_chip_instance_unsupervised()
 
             solutions["positions"].append(positions.numpy())
-            solutions["H_graphs"].append(data)
-            solutions["sizes"].append(data.x.numpy())
-            solutions["edge_attrs"].append(data.edge_attr.numpy())
+            solutions["H_graphs"].append(jraph_data)
+            solutions["sizes"].append(jraph_data.nodes)  # Already numpy from jraph
+            solutions["edge_attrs"].append(jraph_data.edges)  # Already numpy from jraph
             solutions["graph_sizes"].append(positions.shape[0])
             solutions["densities"].append(density)
             solutions["Energies"].append(hpwl)
-            solutions["compl_H_graphs"].append(data)
+            solutions["compl_H_graphs"].append(jraph_data)
+            # For continuous problems, we store positions as "gs_bins" (though semantically different)
+            # This maintains compatibility with the data loader
+            solutions["gs_bins"].append(positions.numpy())
 
             # Save individual instance
             indexed_solution_dict = {}
@@ -135,7 +139,10 @@ class ChipDatasetGenerator(BaseDatasetGenerator):
             is_ports=torch.zeros(len(placed_sizes), dtype=torch.bool)
         )
 
-        return positions, data, actual_density, hpwl
+        # 7. Convert to Jraph format for SDDS compatibility
+        jraph_data = self._pyg_to_jraph(data, positions)
+
+        return positions, jraph_data, actual_density, hpwl
 
     def _generate_netlist_random_graph(self, num_components, x_sizes, y_sizes):
         """
@@ -378,6 +385,47 @@ class ChipDatasetGenerator(BaseDatasetGenerator):
 
         hpwl = (bbox_width + bbox_height).sum().item()
         return hpwl
+
+    def _pyg_to_jraph(self, pyg_data, positions):
+        """
+        Convert PyTorch Geometric Data to Jraph GraphsTuple for SDDS compatibility.
+
+        Args:
+            pyg_data: PyG Data object
+            positions: (V, 2) tensor of positions (not used in graph structure, but stored in nodes)
+
+        Returns:
+            jraph_graph: Jraph GraphsTuple
+        """
+        import jraph
+
+        # Extract data from PyG
+        num_nodes = pyg_data.x.shape[0]
+        num_edges = pyg_data.edge_index.shape[1]
+
+        # Convert to numpy for jraph
+        # Nodes: Store component sizes (x_size, y_size)
+        nodes = pyg_data.x.numpy().astype(np.float32)
+
+        # Edges: Store terminal offsets (src_x_offset, src_y_offset, sink_x_offset, sink_y_offset)
+        edges = pyg_data.edge_attr.numpy().astype(np.float32)
+
+        # Senders and receivers
+        senders = pyg_data.edge_index[0, :].numpy().astype(np.int32)
+        receivers = pyg_data.edge_index[1, :].numpy().astype(np.int32)
+
+        # Create jraph GraphsTuple
+        jraph_graph = jraph.GraphsTuple(
+            nodes=nodes,                      # (V, 2) component sizes
+            edges=edges,                      # (E, 4) terminal offsets
+            senders=senders,                  # (E,) source component indices
+            receivers=receivers,              # (E,) target component indices
+            n_node=np.array([num_nodes]),     # Number of nodes per graph
+            n_edge=np.array([num_edges]),     # Number of edges per graph
+            globals=None                      # No global features
+        )
+
+        return jraph_graph
 
 
 class ChipPlacement:

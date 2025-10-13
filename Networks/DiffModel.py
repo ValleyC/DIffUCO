@@ -38,6 +38,7 @@ class DiffModel(nn.Module):
 	graph_norm: bool = False
 	bfloat16: bool = False
 	dataset_name: str = "None"
+	continuous_dim: int = 0  # If > 0, use continuous mode (e.g., 2 for 2D positions)
 
 
 
@@ -115,14 +116,27 @@ class DiffModel(nn.Module):
 
 	@partial(flax.linen.jit, static_argnums=(0,))
 	def _add_random_nodes_and_time_index(self, X_t, rand_nodes, t_idx_per_node):
+		# Time encoding (same for discrete and continuous)
 		if(self.time_encoding == "one_hot"):
 			X_embed = jax.nn.one_hot(jnp.squeeze(t_idx_per_node, axis = -1), num_classes=self.n_diffusion_steps)
 		else:
 			X_embed = self.vamp_get_sinusoidal_positional_encoding(jnp.squeeze(t_idx_per_node, axis = -1), self.embedding_dim, self.n_diff_steps)
 
-		X_one_hot = jax.nn.one_hot(X_t[...,0], num_classes=self.n_bernoulli_features)
+		# State encoding: different for discrete vs continuous
+		if self.continuous_dim > 0:
+			# Continuous mode: X_t is already continuous positions [num_components, continuous_dim]
+			# Ensure shape is [num_components, continuous_dim]
+			if len(X_t.shape) == 3:  # [num_components, 1, continuous_dim]
+				X_state = X_t[:, 0, :]
+			elif len(X_t.shape) == 2:  # [num_components, continuous_dim]
+				X_state = X_t
+			else:
+				raise ValueError(f"Unexpected X_t shape in continuous mode: {X_t.shape}")
+		else:
+			# Discrete mode: one-hot encode discrete states
+			X_state = jax.nn.one_hot(X_t[...,0], num_classes=self.n_bernoulli_features)
 
-		X_input = jnp.concatenate([X_one_hot, X_embed, rand_nodes], axis=-1)
+		X_input = jnp.concatenate([X_state, X_embed, rand_nodes], axis=-1)
 		return X_input
 
 	@partial(flax.linen.jit, static_argnums=0)
@@ -131,17 +145,38 @@ class DiffModel(nn.Module):
 
 		out_dict, key = self.apply(params, jraph_graph_list, X_prev, rand_nodes, t_idx_per_node, key)
 
-		spin_logits = out_dict["spin_logits"]
-
 		node_graph_idx, n_graph, n_node = self.get_graph_info(jraph_graph_list)
 
-		X_next, spin_log_probs, key = self.sample_from_model( spin_logits, key)
-		
-		graph_log_prob = jax.lax.stop_gradient(jnp.exp((self.__get_log_prob(spin_log_probs[...,0], node_graph_idx, n_graph)/(n_node))[:-1]))
-		out_dict["X_next"] = X_next
-		out_dict["spin_log_probs"] = spin_log_probs
-		out_dict["state_log_probs"] = self.__get_log_prob(spin_log_probs[...,0], node_graph_idx, n_graph)
-		out_dict["graph_log_prob"] = graph_log_prob
+		if self.continuous_dim > 0:
+			# Continuous mode
+			output_params = out_dict  # Contains "position_mean" and "position_log_var"
+			X_next, position_log_probs, key = self.sample_from_model(output_params, key)
+
+			# Aggregate log probs to graph level
+			# position_log_probs shape: [num_components, 1] or [num_components,]
+			if len(position_log_probs.shape) > 1:
+				position_log_probs_flat = position_log_probs[..., 0]
+			else:
+				position_log_probs_flat = position_log_probs
+
+			state_log_probs = self.__get_log_prob(position_log_probs_flat, node_graph_idx, n_graph)
+			graph_log_prob = jax.lax.stop_gradient(jnp.exp((state_log_probs / n_node)[:-1]))
+
+			out_dict["X_next"] = X_next
+			out_dict["position_log_probs"] = position_log_probs
+			out_dict["state_log_probs"] = state_log_probs
+			out_dict["graph_log_prob"] = graph_log_prob
+		else:
+			# Discrete mode
+			spin_logits = out_dict["spin_logits"]
+			X_next, spin_log_probs, key = self.sample_from_model(spin_logits, key)
+
+			graph_log_prob = jax.lax.stop_gradient(jnp.exp((self.__get_log_prob(spin_log_probs[...,0], node_graph_idx, n_graph)/(n_node))[:-1]))
+			out_dict["X_next"] = X_next
+			out_dict["spin_log_probs"] = spin_log_probs
+			out_dict["state_log_probs"] = self.__get_log_prob(spin_log_probs[...,0], node_graph_idx, n_graph)
+			out_dict["graph_log_prob"] = graph_log_prob
+
 		return out_dict, key
 
 	@partial(flax.linen.jit, static_argnums=0)
@@ -178,20 +213,58 @@ class DiffModel(nn.Module):
 		return X_next, spin_log_probs, spin_logits, graph_log_prob, key
 
 	@partial(flax.linen.jit, static_argnums=0)
-	def sample_from_model(self, spin_logits, key):
+	def sample_from_model(self, output_params, key):
+		"""
+		Sample from model output.
+
+		Args:
+			output_params: For discrete: spin_logits [num_nodes, 1, num_classes]
+			               For continuous: tuple of (position_mean, position_log_var)
+			key: JAX random key
+
+		Returns:
+			X_next: Sampled state
+			log_probs: Log probability of sample
+			key: Updated random key
+		"""
 		key, subkey = jax.random.split(key)
-		X_next = jax.random.categorical(key=subkey,
+
+		if self.continuous_dim > 0:
+			# Continuous mode: sample from Gaussian using reparameterization trick
+			# output_params should be dict with "position_mean" and "position_log_var"
+			if isinstance(output_params, dict):
+				position_mean = output_params["position_mean"]  # [num_components, 1, continuous_dim]
+				position_log_var = output_params["position_log_var"]
+			else:
+				# Assume tuple (mean, log_var)
+				position_mean, position_log_var = output_params
+
+			# Reparameterization trick: X = mean + std * epsilon
+			epsilon = jax.random.normal(subkey, shape=position_mean.shape)
+			std = jnp.exp(0.5 * position_log_var)
+			X_next = position_mean + std * epsilon
+
+			# Compute log probability: log N(X | mean, var)
+			# log p = -0.5 * [epsilon^2 + log_var + log(2*pi)]
+			log_prob_per_dim = -0.5 * (epsilon**2 + position_log_var + jnp.log(2 * jnp.pi))
+			log_probs = jnp.sum(log_prob_per_dim, axis=-1)  # Sum over continuous_dim
+
+			# Remove middle dimension if present: [num_components, 1] -> [num_components,]
+			if len(X_next.shape) == 3:
+				X_next = X_next[:, 0, :]  # [num_components, continuous_dim]
+
+		else:
+			# Discrete mode: sample from categorical distribution
+			spin_logits = output_params
+			X_next = jax.random.categorical(key=subkey,
 											   logits=spin_logits,
 											   axis=-1,
 											   shape=spin_logits.shape[:-1])
 
+			one_hot_state = jax.nn.one_hot(X_next, num_classes=self.n_bernoulli_features)
+			log_probs = jnp.sum(spin_logits * one_hot_state, axis=-1)
 
-		one_hot_state = jax.nn.one_hot(X_next, num_classes=self.n_bernoulli_features)
-		#X_next = jnp.expand_dims(X_next, axis = -1)
-		spin_log_probs = jnp.sum(spin_logits * one_hot_state, axis=-1)
-
-		#print("Diff model model samples", X_next.shape, one_hot_state.shape)
-		return X_next, spin_log_probs, key
+		return X_next, log_probs, key
 
 	@partial(flax.linen.jit, static_argnums=0)
 	def calc_log_q(self, params, jraph_graph_list, X_prev, rand_nodes, X_next, t_idx_per_node, key):
@@ -242,19 +315,43 @@ class DiffModel(nn.Module):
 
 	@partial(flax.linen.jit, static_argnums=(0,2))
 	def sample_prior(self, j_graph, N_basis_states, key):
+		"""
+		Sample from prior distribution.
+
+		For discrete: sample from uniform categorical
+		For continuous: sample from standard Gaussian N(0, I)
+		"""
 		nodes = j_graph.nodes
-		shape = (nodes.shape[0], N_basis_states, 1)
+		num_nodes = nodes.shape[0]
 
 		key, subkey = jax.random.split(key)
-		log_p_uniform = self._get_prior(shape)
 
-		X_prev = jax.random.categorical(key=subkey,
-										logits=log_p_uniform,
-										axis=-1,
-										shape=log_p_uniform.shape[:-1])
+		if self.continuous_dim > 0:
+			# Continuous mode: sample from N(0, I)
+			shape = (num_nodes, N_basis_states)
+			prior_mean, prior_log_var = self._get_prior(shape)
 
-		one_hot_state = jax.nn.one_hot(X_prev, num_classes=self.n_bernoulli_features)
-		return X_prev, one_hot_state, log_p_uniform, key
+			# Sample using reparameterization
+			epsilon = jax.random.normal(subkey, shape=prior_mean.shape)
+			X_prev = prior_mean + jnp.exp(0.5 * prior_log_var) * epsilon
+
+			# For continuous, we don't have one_hot_state
+			# Return X_prev as-is, and prior params
+			one_hot_state = None  # Not applicable for continuous
+			prior_params = (prior_mean, prior_log_var)
+			return X_prev, one_hot_state, prior_params, key
+		else:
+			# Discrete mode: sample from uniform categorical
+			shape = (num_nodes, N_basis_states, 1)
+			log_p_uniform = self._get_prior(shape)
+
+			X_prev = jax.random.categorical(key=subkey,
+											logits=log_p_uniform,
+											axis=-1,
+											shape=log_p_uniform.shape[:-1])
+
+			one_hot_state = jax.nn.one_hot(X_prev, num_classes=self.n_bernoulli_features)
+			return X_prev, one_hot_state, log_p_uniform, key
 
 	@partial(flax.linen.jit, static_argnums=(0,2))
 	def sample_prior_w_probs(self, j_graph, N_basis_states, key):
@@ -264,8 +361,30 @@ class DiffModel(nn.Module):
 
 	@partial(flax.linen.jit, static_argnums=(0,1))
 	def _get_prior(self, shape):
-		log_p_uniform = jnp.log(1./self.n_bernoulli_features * jnp.ones(shape +  (self.n_bernoulli_features, )))
-		return log_p_uniform
+		"""
+		Get prior distribution.
+
+		For discrete: uniform categorical distribution
+		For continuous: standard Gaussian N(0, I)
+
+		Args:
+			shape: Base shape (num_nodes, N_basis_states, 1) for discrete
+			       or (num_components, N_basis_states) for continuous
+
+		Returns:
+			For discrete: log probabilities of uniform categorical
+			For continuous: tuple of (mean, log_var) for standard Gaussian
+		"""
+		if self.continuous_dim > 0:
+			# Continuous prior: N(0, I)
+			# Mean = 0, log_var = log(1) = 0
+			mean = jnp.zeros(shape + (self.continuous_dim,))
+			log_var = jnp.zeros(shape + (self.continuous_dim,))
+			return mean, log_var
+		else:
+			# Discrete prior: uniform categorical
+			log_p_uniform = jnp.log(1./self.n_bernoulli_features * jnp.ones(shape +  (self.n_bernoulli_features, )))
+			return log_p_uniform
 
 	#@partial(flax.linen.jit, static_argnums=(0,-1))
 	def __get_log_prob(self, spin_log_probs, node_graph_idx, n_graph):

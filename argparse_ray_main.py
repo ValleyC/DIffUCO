@@ -7,9 +7,9 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--debug', action='store_true', help='Switch ray into local mode for debugging')
 parser.add_argument('--multi_gpu', action='store_true', help='wheter to use multi gpu or not, KEEP IT ALWAYS TRUE')
 parser.add_argument('--mode', default='Diffusion', choices = ["Diffusion"], help='Define the Approach')
-parser.add_argument('--EnergyFunction', default='MIS', choices = ["MaxCut", "MIS", "MVC", "MaxCl", "WMIS", "MDS", "MaxClv2", "TSP", "IsingModel", "SpinGlass", "SpinGlass"], help='Define the EnergyFunction of the IsingModel')
-parser.add_argument('--IsingMode', default='RB_iid_100', choices = ["Gset","BA_large","RB_iid_small", "RB_iid_dummy", "BA_dummy", "RB_iid_large" ,"RRG_200_k_=all", "BA_small","TSP_random_100", 
-                                                                    "TSP_random_20", "COLLAB", "IMDB-BINARY", "RB_iid_100_dummy" , "RB_iid_200", "RB_iid_100", "NxNLattice_4x4", "NxNLattice_8x8", "NxNLattice_16x16", "NxNLattice_10x10", "SpinGlassUniform_10x10", "SpinGlass_16x16", "NxNLattice_24x24", "NxNLattice_32x32"], help='Define the Training dataset')
+parser.add_argument('--EnergyFunction', default='MIS', choices = ["MaxCut", "MIS", "MVC", "MaxCl", "WMIS", "MDS", "MaxClv2", "TSP", "IsingModel", "SpinGlass", "SpinGlass", "ChipPlacement"], help='Define the EnergyFunction of the IsingModel')
+parser.add_argument('--IsingMode', default='RB_iid_100', choices = ["Gset","BA_large","RB_iid_small", "RB_iid_dummy", "BA_dummy", "RB_iid_large" ,"RRG_200_k_=all", "BA_small","TSP_random_100",
+                                                                    "TSP_random_20", "COLLAB", "IMDB-BINARY", "RB_iid_100_dummy" , "RB_iid_100", "RB_iid_200", "NxNLattice_4x4", "NxNLattice_8x8", "NxNLattice_16x16", "NxNLattice_10x10", "SpinGlassUniform_10x10", "SpinGlass_16x16", "NxNLattice_24x24", "NxNLattice_32x32", "Chip_dummy", "Chip_small", "Chip_20_components", "Chip_50_components"], help='Define the Training dataset')
 parser.add_argument('--graph_mode', default='normal', choices = ["normal", "TSPModel", "Transformer", "UNet"], help='Use U-Net or normal GNN, TSP model is a graph based implementation of the transformer, transformer is to be prefered')
 parser.add_argument('--train_mode', default='REINFORCE', choices = ["REINFORCE", "PPO", "Forward_KL"], help='Use U-Net or normal GNN')
 parser.add_argument('--AnnealSchedule', default='linear', choices = ["linear", "cosine", "exp"], help='Define the Annealing Schedule')
@@ -27,7 +27,7 @@ parser.add_argument('--n_rand_nodes', default=2, type = int, help='define node e
 parser.add_argument('--stop_epochs', default=10000, type = int, help='define early stopping')
 parser.add_argument('--n_diffusion_steps', default=[9], type = int, help='define number of diffusion steps', nargs = "+")
 parser.add_argument('--time_encoding', default="one_hot", type = str, help='encoding of diffusion steps')
-parser.add_argument('--noise_potential', default = ["annealed_obj"], type = str, choices = ["bernoulli", "boltzmann_noise", "diffusion", "annealed_obj", "categorical", "combined"], help='define the diffusion mode', nargs = "+")
+parser.add_argument('--noise_potential', default = ["annealed_obj"], type = str, choices = ["bernoulli", "boltzmann_noise", "diffusion", "annealed_obj", "categorical", "combined", "gaussian"], help='define the diffusion mode', nargs = "+")
 parser.add_argument('--n_basis_states', default=[10], type = int, help='number of states per graph', nargs = "+")
 parser.add_argument('--n_test_basis_states', default=8, type = int, help='number of states per graph during test time')
 parser.add_argument('--batch_size', default=[30], type = int, help='number of graphs within a batch', nargs = "+")
@@ -247,6 +247,10 @@ def detect_and_run_for_loops():
                                                 "value_weighting": args.value_weighting
                                             }
 
+                                            # Add continuous_dim for ChipPlacement
+                                            if args.EnergyFunction == "ChipPlacement":
+                                                flexible_config["continuous_dim"] = 2
+
                                             run(flexible_config=flexible_config, overwrite=True)
 
 
@@ -319,7 +323,8 @@ def run( flexible_config, overwrite = True):
         "lr_schedule": "cosine",
         "TD_k": 3,
         "clip_value": 0.2,
-        "value_weighting": 0.65
+        "value_weighting": 0.65,
+        "continuous_dim": 0  # Default 0 for discrete; set to 2 for ChipPlacement
     }
 
     if(overwrite):
