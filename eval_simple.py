@@ -41,6 +41,31 @@ def main():
 
     # Initialize trainer
     print("Initializing trainer...")
+
+    # WORKAROUND: Temporarily patch the dataloader statistics computation
+    # to skip test set (which causes multiprocessing issues)
+    import Data.LoadGraphDataset as LoadGraphDataset
+    original_compute_stats = LoadGraphDataset.SolutionDatasetLoader._compute_dataset_statistics
+
+    def patched_compute_stats(self, mode="train"):
+        if mode == "test":
+            print(f"  Skipping statistics computation for test set (workaround)")
+            # Set dummy values
+            if self.dataloader_test is not None:
+                self.dataloader_test.smallest_n_edges_input_graph = 0
+                self.dataloader_test.largest_n_edges_input_graph = 1000
+                self.dataloader_test.smallest_n_edges_energy_graph = 0
+                self.dataloader_test.largest_n_edges_energy_graph = 1000
+                self.dataloader_test.smallest_n_nodes_input_graph = 0
+                self.dataloader_test.largest_n_nodes_input_graph = 100
+                self.dataloader_test.smallest_n_nodes_energy_graph = 0
+                self.dataloader_test.largest_n_nodes_energy_graph = 100
+            return
+        else:
+            return original_compute_stats(self, mode)
+
+    LoadGraphDataset.SolutionDatasetLoader._compute_dataset_statistics = patched_compute_stats
+
     try:
         trainer = TrainMeanField(config)
     except Exception as e:
@@ -48,6 +73,9 @@ def main():
         import traceback
         traceback.print_exc()
         return
+    finally:
+        # Restore original function
+        LoadGraphDataset.SolutionDatasetLoader._compute_dataset_statistics = original_compute_stats
 
     # Load parameters
     trainer.params = checkpoint['params']
