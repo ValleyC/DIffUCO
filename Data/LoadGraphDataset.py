@@ -12,7 +12,7 @@ from torch.utils.data import DataLoader
 from unipath import Path
 import os
 import jraph_utils
-from playground.Clusters.Meluxina import data_path
+# Removed playground import - using local paths only
 
 
 class SolutionDatasetLoader:
@@ -187,12 +187,9 @@ class SolutionDataset(Dataset):
         self.seed = seed
         self.relaxed = relaxed
 
-        print("here")
-        print(os.path.exist("/mnt/proj2/dd-23-97/"))
-        if(os.path.exist("/mnt/proj2/dd-23-97/")):
+        # Check for cluster-specific paths, otherwise use local path
+        if(os.path.isdir("/mnt/proj2/dd-23-97/")):
             base_path = "/mnt/proj2/dd-23-97/"
-        elif(os.path.exist(data_path)):
-            base_path = data_path
         else:
             base_path = os.path.dirname(os.getcwd()) + "/DIffUCO/DatasetCreator/loadGraphDatasets/DatasetSolutions/"
 
@@ -316,15 +313,12 @@ class SolutionDataset_InMemory(Dataset):
             select_data_name =  self.problem_name
 
 
+        # Check for cluster-specific paths, otherwise use local path
         if(os.path.isdir("/mnt/proj2/dd-23-97/")):
             base_path = "/mnt/proj2/dd-23-97/"
             load_path = base_path + f"no_norm/{self.dataset_name}/{self.mode}/{self.mode}/{self.seed}/{select_data_name}/indexed/"
-        elif(os.path.isdir(data_path)):
-            base_path = data_path
-            load_path = base_path + f"/no_norm/{self.dataset_name}/{self.mode}/{self.mode}/{self.seed}/{select_data_name}/indexed/"
         else:
             base_path = os.path.dirname(os.getcwd()) + "/DIffUCO/DatasetCreator/loadGraphDatasets/DatasetSolutions/"
-
             load_path = base_path + f"no_norm/{self.dataset_name}/{self.mode}/{self.seed}/{select_data_name}/indexed/"
         with open(load_path+ f"idx_{0}_solutions.pickle", "rb") as file:
             pickle.load(file)
