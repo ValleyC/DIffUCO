@@ -12,7 +12,8 @@ Gset = ["Gset"]
 IsingModel = ["NxNLattice_4x4", "NxNLattice_8x8", "NxNLattice_10x10", "NxNLattice_16x16", "NxNLattice_24x24", "NxNLattice_32x32"]
 SpinGlassdataset = ["SpinGlass_10x10", "SpinGlass_16x16"]
 SpinGlassUniformdataset = ["SpinGlassUniform_10x10"]
-dataset_choices =  RB_datasets + BA_datasets + TSP_datasets + Gset + IsingModel + SpinGlassdataset + SpinGlassUniformdataset
+Chip_datasets = ["Chip_small", "Chip_large", "Chip_dummy"]
+dataset_choices =  RB_datasets + BA_datasets + TSP_datasets + Gset + IsingModel + SpinGlassdataset + SpinGlassUniformdataset + Chip_datasets
 parser = argparse.ArgumentParser()
 
 parser.add_argument('--licence_path', default="/system/user/sanokows/", type = str, help='licence base path')
@@ -24,7 +25,7 @@ parser.add_argument('--gurobi_solve', action='store_true', help='whether to solv
 parser.add_argument('--no-gurobi_solve', dest='gurobi_solve', action='store_false')
 parser.add_argument('--datasets', default=['RB_iid_small'], choices = dataset_choices, help='Define the dataset', nargs="+")
 parser.add_argument('--diff_ps', default=False, type = bool, help='')
-parser.add_argument('--problems', default=['MIS'], choices = ["MIS", "MVC", "MaxCl", "MaxCut", "MDS", "TSP", "IsingModel", "SpinGlass"], help='Define the CO problem', nargs="+")
+parser.add_argument('--problems', default=['MIS'], choices = ["MIS", "MVC", "MaxCl", "MaxCut", "MDS", "TSP", "IsingModel", "SpinGlass", "ChipPlacement"], help='Define the CO problem', nargs="+")
 parser.add_argument('--modes', default=[ "test", "train", "val"], type = str, help='Define dataset split', nargs = "+")
 parser.add_argument('--time_limits', default=["inf", "0.1", "1."], type = str, help='Gurobi Time Limit for each [mode]', nargs = "+")
 parser.add_argument('--thread_fraction', default=0.75, type = float, help='Thread fraction for gurobi')
