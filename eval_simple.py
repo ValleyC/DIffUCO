@@ -41,14 +41,46 @@ def main():
 
     # Initialize trainer
     print("Initializing trainer...")
-    trainer = TrainMeanField(config)
+    try:
+        trainer = TrainMeanField(config)
+    except Exception as e:
+        print(f"ERROR during trainer initialization: {e}")
+        import traceback
+        traceback.print_exc()
+        return
 
     # Load parameters
     trainer.params = checkpoint['params']
     print("Loaded parameters\n")
 
+    # Check if dataloaders exist
+    print("Checking dataloaders...")
+    print(f"  dataloader_train: {trainer.dataloader_train is not None}")
+    print(f"  dataloader_val: {trainer.dataloader_val is not None}")
+    print(f"  dataloader_test: {trainer.dataloader_test is not None}")
+
+    if trainer.dataloader_test is None:
+        print("\nERROR: Test dataloader is None!")
+        print(f"Dataset path should be:")
+        print(f"  DatasetCreator/loadGraphDatasets/DatasetSolutions/no_norm/{config['dataset_name']}/test_ChipPlacement_seed_123_solutions.pickle")
+
+        import os
+        test_path = f"DatasetCreator/loadGraphDatasets/DatasetSolutions/no_norm/{config['dataset_name']}/test_ChipPlacement_seed_123_solutions.pickle"
+        print(f"\nChecking if file exists: {os.path.exists(test_path)}")
+
+        # Check what files do exist
+        dir_path = f"DatasetCreator/loadGraphDatasets/DatasetSolutions/no_norm/{config['dataset_name']}/"
+        if os.path.exists(dir_path):
+            print(f"\nFiles in {dir_path}:")
+            for f in os.listdir(dir_path):
+                print(f"  {f}")
+        else:
+            print(f"\nDirectory does not exist: {dir_path}")
+
+        return
+
     # Run test evaluation
-    print("Running evaluation on test set...")
+    print("\nRunning evaluation on test set...")
     eval_dict = trainer.test(mode="test")
 
     print("\n" + "="*80)
