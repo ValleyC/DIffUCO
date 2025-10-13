@@ -274,21 +274,64 @@ class DiffModel(nn.Module):
 
 	@partial(flax.linen.jit, static_argnums=0)
 	def calc_log_q(self, params, jraph_graph_list, X_prev, rand_nodes, X_next, t_idx_per_node, key):
-		out_dict, key = self.apply(params, jraph_graph_list, X_prev, rand_nodes, t_idx_per_node, key)
+		"""
+		Calculate log probability q(X_next | X_prev, t) under the model.
 
-		spin_logits = out_dict["spin_logits"]
+		Args:
+			params: Model parameters
+			jraph_graph_list: Graph structure
+			X_prev: Previous state
+			rand_nodes: Random node features
+			X_next: Next state to evaluate probability of
+			t_idx_per_node: Time index per node
+			key: Random key
+
+		Returns:
+			out_dict: Dictionary with log probabilities
+			key: Updated random key
+		"""
+		out_dict, key = self.apply(params, jraph_graph_list, X_prev, rand_nodes, t_idx_per_node, key)
 		node_graph_idx, n_graph, n_node = self.get_graph_info(jraph_graph_list)
 
-		one_hot_state = jax.nn.one_hot(X_next, num_classes=self.n_bernoulli_features)
-		#X_next = jnp.expand_dims(X_next, axis = -1)
-		spin_log_probs = jnp.sum(spin_logits * one_hot_state, axis=-1)
-		#print(X_next.shape, X_next, jnp.exp(spin_log_probs))
-		X_next_log_prob = self.__get_log_prob(spin_log_probs[...,0], node_graph_idx, n_graph)
+		if self.continuous_dim > 0:
+			# Continuous mode: compute log p(X_next | mean, var) for Gaussian
+			position_mean = out_dict["position_mean"]  # [num_components, 1, continuous_dim]
+			position_log_var = out_dict["position_log_var"]
 
-		# graph_log_prob = jax.lax.stop_gradient(jnp.exp((self.__get_log_prob(spin_log_probs[...,0], node_graph_idx, n_graph)/(n_node[:,None]*self.n_bernoulli_features))[:-1]))
-		# print("average prob T:0", jnp.mean(graph_log_prob))
-		out_dict["state_log_probs"] = X_next_log_prob
-		out_dict["spin_log_probs"] = spin_log_probs
+			# X_next shape might be [num_components, continuous_dim] or [num_components, 1, continuous_dim]
+			# Ensure it matches position_mean shape
+			if len(X_next.shape) == 2:
+				X_next_expanded = X_next[:, None, :]  # [num_components, 1, continuous_dim]
+			else:
+				X_next_expanded = X_next
+
+			# Compute log N(X_next | mean, var)
+			# log p = -0.5 * [(x - mean)^2 / var + log(var) + log(2*pi)]
+			var = jnp.exp(position_log_var)
+			diff_sq = (X_next_expanded - position_mean) ** 2
+			log_prob_per_dim = -0.5 * (diff_sq / var + position_log_var + jnp.log(2 * jnp.pi))
+			position_log_probs = jnp.sum(log_prob_per_dim, axis=-1)  # Sum over continuous_dim -> [num_components, 1]
+
+			# Aggregate to graph level
+			if len(position_log_probs.shape) > 1:
+				position_log_probs_flat = position_log_probs[..., 0]  # [num_components,]
+			else:
+				position_log_probs_flat = position_log_probs
+
+			X_next_log_prob = self.__get_log_prob(position_log_probs_flat, node_graph_idx, n_graph)
+
+			out_dict["state_log_probs"] = X_next_log_prob
+			out_dict["position_log_probs"] = position_log_probs
+		else:
+			# Discrete mode: compute log p(X_next | logits) for categorical
+			spin_logits = out_dict["spin_logits"]
+			one_hot_state = jax.nn.one_hot(X_next, num_classes=self.n_bernoulli_features)
+			spin_log_probs = jnp.sum(spin_logits * one_hot_state, axis=-1)
+			X_next_log_prob = self.__get_log_prob(spin_log_probs[...,0], node_graph_idx, n_graph)
+
+			out_dict["state_log_probs"] = X_next_log_prob
+			out_dict["spin_log_probs"] = spin_log_probs
+
 		return out_dict, key
 
 	@partial(flax.linen.jit, static_argnums=0)
