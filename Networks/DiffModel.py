@@ -294,17 +294,13 @@ class DiffModel(nn.Module):
 	@partial(flax.linen.jit, static_argnums=0)
 	def calc_log_q_T(self, j_graph, X_T):
 		'''
+		Calculate log probability of prior distribution at X_T.
 
-		:param j_graph:
-		:param X_T: shape =  (batched_graph_nodes, n_states, 1)
-		:return:
+		:param j_graph: Graph structure
+		:param X_T: For discrete: shape = (batched_graph_nodes, n_states, 1)
+		            For continuous: shape = (batched_graph_nodes, n_states, continuous_dim)
+		:return: log probability of X_T under prior
 		'''
-
-		shape = X_T.shape[0:-1]
-		log_p_uniform = self._get_prior( shape)
-
-		one_hot_state = jax.nn.one_hot(X_T[...,-1], num_classes=self.n_bernoulli_features)
-		log_p_X_T_per_node = jnp.sum(log_p_uniform * one_hot_state, axis=-1)
 
 		nodes = j_graph.nodes
 		n_node = j_graph.n_node
@@ -313,10 +309,34 @@ class DiffModel(nn.Module):
 		total_nodes = jax.tree_util.tree_leaves(nodes)[0].shape[0]
 		node_graph_idx = jnp.repeat(graph_idx, n_node, axis=0, total_repeat_length=total_nodes)
 
-		log_p_X_T = self.__get_log_prob(log_p_X_T_per_node, node_graph_idx, n_graph)
+		if self.continuous_dim > 0:
+			# Continuous mode: X_T ~ N(0, I)
+			# X_T shape: (num_nodes, n_basis_states, continuous_dim)
+			shape = X_T.shape[0:2]  # (num_nodes, n_basis_states)
+			prior_mean, prior_log_var = self._get_prior(shape)
 
-		# graph_log_prob = jax.lax.stop_gradient(jnp.exp((self.__get_log_prob(log_p_X_T_per_node, node_graph_idx, n_graph)/(n_node[:,None]*self.n_bernoulli_features))[:-1]))
-		# print("average prob 0", jnp.mean(graph_log_prob))
+			# Compute log p(X_T) = log N(X_T | 0, I)
+			# log N(x | mu, sigma^2) = -0.5 * [(x-mu)^2/sigma^2 + log(sigma^2) + log(2*pi)]
+			# For N(0, I): log N(x | 0, I) = -0.5 * [x^2 + log(2*pi)]
+			log_p_per_dim = -0.5 * (X_T**2 + jnp.log(2 * jnp.pi))  # (num_nodes, n_basis_states, continuous_dim)
+			log_p_X_T_per_node = jnp.sum(log_p_per_dim, axis=-1)  # Sum over continuous_dim
+
+			# Average over n_basis_states? Or just take one?
+			# Based on discrete code, seems like we're treating each basis state separately
+			# For now, let's sum over basis states dimension
+			log_p_X_T_per_node = jnp.sum(log_p_X_T_per_node, axis=-1)  # (num_nodes,)
+
+			log_p_X_T = self.__get_log_prob(log_p_X_T_per_node, node_graph_idx, n_graph)
+		else:
+			# Discrete mode: original implementation
+			shape = X_T.shape[0:-1]
+			log_p_uniform = self._get_prior(shape)
+
+			one_hot_state = jax.nn.one_hot(X_T[...,-1], num_classes=self.n_bernoulli_features)
+			log_p_X_T_per_node = jnp.sum(log_p_uniform * one_hot_state, axis=-1)
+
+			log_p_X_T = self.__get_log_prob(log_p_X_T_per_node, node_graph_idx, n_graph)
+
 		return log_p_X_T
 
 	@partial(flax.linen.jit, static_argnums=(0,2))
