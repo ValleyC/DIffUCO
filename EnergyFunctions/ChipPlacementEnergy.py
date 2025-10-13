@@ -120,7 +120,7 @@ class ChipPlacementEnergyClass(BaseEnergyClass):
 
         return Energy_per_graph, positions, constraint_violations_per_graph
 
-    @partial(jax.jit, static_argnums=(0,))
+    @partial(jax.jit, static_argnums=(0, 4))
     def _compute_hpwl(self, H_graph, positions, node_gr_idx, n_graph):
         """
         Compute Half-Perimeter Wirelength.
@@ -166,7 +166,7 @@ class ChipPlacementEnergyClass(BaseEnergyClass):
 
         return hpwl_per_graph
 
-    @partial(jax.jit, static_argnums=(0,))
+    @partial(jax.jit, static_argnums=(0, 4))
     def _compute_overlap_penalty(self, positions, component_sizes, node_gr_idx, n_graph):
         """
         Compute overlap penalty between components.
@@ -241,7 +241,7 @@ class ChipPlacementEnergyClass(BaseEnergyClass):
 
         return overlap_per_graph
 
-    @partial(jax.jit, static_argnums=(0,))
+    @partial(jax.jit, static_argnums=(0, 4))
     def _compute_boundary_penalty(self, positions, component_sizes, node_gr_idx, n_graph):
         """
         Compute boundary violation penalty.
