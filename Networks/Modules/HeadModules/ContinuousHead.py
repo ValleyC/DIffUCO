@@ -40,14 +40,10 @@ class ContinuousHead(nn.Module):
     @param dtype: Data type for computations (float32 or bfloat16)
     """
     continuous_dim: int = 2  # (x, y) positions
-    value_hidden_dims: list = None
+    value_hidden_dims: tuple = (120, 64, 1)  # Default architecture
     dtype: any = jnp.float32
 
     def setup(self):
-        # Default value network architecture if not specified
-        if self.value_hidden_dims is None:
-            self.value_hidden_dims = [120, 64, 1]
-
         # Mean network: predicts mean of Gaussian for each dimension
         # Input: embeddings from GNN
         # Output: (batch, continuous_dim) - mean positions
@@ -148,13 +144,10 @@ class ContinuousHeadChip(nn.Module):
     """
     continuous_dim: int = 2
     size_conditioning: bool = True
-    value_hidden_dims: list = None
+    value_hidden_dims: tuple = (120, 64, 1)  # Default architecture
     dtype: any = jnp.float32
 
     def setup(self):
-        if self.value_hidden_dims is None:
-            self.value_hidden_dims = [120, 64, 1]
-
         # If size conditioning, we'll have a size embedding layer
         if self.size_conditioning:
             self.size_embed = nn.Dense(32, dtype=self.dtype, name="size_embedding")
