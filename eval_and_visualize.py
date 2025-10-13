@@ -175,41 +175,35 @@ def evaluate_instance(trainer, instance_data, instance_id):
     print(f"  Initial HPWL: {initial_hpwl:.2f}")
 
     # Prepare batch for model inference
-    # Need to wrap graph in the expected format
-    energy_graph = graph  # Already in jraph format
+    # Unwrap params from pmap (take first device replica)
+    params_single = jax.tree_util.tree_map(lambda x: x[0] if (isinstance(x, jnp.ndarray) and x.shape[0] == 1) else x, trainer.params)
 
-    # Add batch dimension for pmap
-    # The trainer expects pmapped inputs: [n_devices, ...]
-    n_devices = len(jax.devices())
-
-    # Replicate graph across devices
-    energy_graph_batch = jax.tree_map(lambda x: jnp.repeat(jnp.expand_dims(x, 0), n_devices, axis=0), energy_graph)
-
-    # Create graph dict
-    graph_dict = {"graphs": [graph]}  # List of single graph
-    graph_dict_batch = jax.tree_map(lambda x: jnp.repeat(jnp.expand_dims(x, 0), n_devices, axis=0) if isinstance(x, jnp.ndarray) else x, graph_dict)
+    # Prepare graph in expected format
+    energy_graph = graph
+    graph_dict = {"graphs": [graph]}
 
     # Generate key
     key = jax.random.PRNGKey(instance_id)
-    batched_key = jax.random.split(key, num=n_devices)
 
     # Run inference
     try:
         print(f"  Running model inference...")
-        loss, (log_dict, _) = trainer.TrainerClass.pmap_sample(
-            trainer.params,
-            graph_dict_batch,
-            energy_graph_batch,
+
+        # Use the non-pmapped sample function directly
+        loss, (log_dict, _) = trainer.TrainerClass.sample(
+            params_single,
+            graph_dict,
+            energy_graph,
             trainer.T,
-            batched_key
+            key
         )
 
         # Extract generated positions
-        # log_dict["X_0"] has shape [n_devices, n_nodes, n_basis_states, continuous_dim]
+        # log_dict["X_0"] has shape [n_nodes, n_basis_states, continuous_dim]
         X_0 = log_dict["X_0"]
 
-        # Take first device, all nodes, first basis state
-        generated_positions = np.array(X_0[0, :, 0, :])  # [n_nodes, 2]
+        # Take all nodes, first basis state
+        generated_positions = np.array(X_0[:, 0, :])  # [n_nodes, 2]
 
         # Compute generated HPWL
         generated_hpwl = compute_hpwl(generated_positions, graph)
