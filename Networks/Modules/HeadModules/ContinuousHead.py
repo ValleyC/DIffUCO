@@ -89,9 +89,11 @@ class ContinuousHead(nn.Module):
         # embeddings shape: [num_components, 1, embedding_dim]
         # We keep the middle dimension (1) for compatibility with existing code structure
 
-        # Predict mean: unbounded continuous values
-        # For chip placement: (-1, 1) range typical, but model learns appropriate scale
-        position_mean = self.mean_layer(embeddings)  # [num_components, 1, continuous_dim]
+        # Predict mean: bounded to [-1, 1] range using tanh
+        # For chip placement, canvas is typically [-1, 1] x [-1, 1]
+        # Using tanh ensures positions stay within reasonable bounds
+        position_mean_unbounded = self.mean_layer(embeddings)  # [num_components, 1, continuous_dim]
+        position_mean = jnp.tanh(position_mean_unbounded)  # Bound to [-1, 1]
 
         # Predict log variance: clip to prevent numerical instability
         # log_var in [-10, 2] corresponds to std in [exp(-5)=0.0067, exp(1)=2.718]
@@ -192,8 +194,9 @@ class ContinuousHeadChip(nn.Module):
             size_features = jnp.expand_dims(size_features, axis=1)  # [num_components, 1, 32]
             embeddings = jnp.concatenate([embeddings, size_features], axis=-1)
 
-        # Predict positions
-        position_mean = self.mean_layer(embeddings)
+        # Predict positions: bound to [-1, 1] using tanh
+        position_mean_unbounded = self.mean_layer(embeddings)
+        position_mean = jnp.tanh(position_mean_unbounded)
         position_log_var = self.log_var_layer(embeddings)
         position_log_var = jnp.clip(position_log_var, -10.0, 2.0)
 
