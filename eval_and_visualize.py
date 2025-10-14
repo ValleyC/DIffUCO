@@ -319,7 +319,13 @@ def print_summary(results):
 
     initial_hpwls = [r['initial_hpwl'] for r in results]
     generated_hpwls = [r['generated_hpwl'] for r in results]
-    improvements = [r['improvement'] for r in results]
+    improvements = [r['hpwl_improvement'] for r in results]
+    energy_improvements = [r['energy_improvement'] for r in results]
+
+    initial_overlaps = [r['initial_overlap'] for r in results]
+    generated_overlaps = [r['generated_overlap'] for r in results]
+    initial_boundaries = [r['initial_boundary'] for r in results]
+    generated_boundaries = [r['generated_boundary'] for r in results]
 
     print(f"\nNumber of instances: {len(results)}")
     print(f"\nInitial HPWL (random placement):")
@@ -334,11 +340,25 @@ def print_summary(results):
     print(f"  Min:  {np.min(generated_hpwls):.2f}")
     print(f"  Max:  {np.max(generated_hpwls):.2f}")
 
-    print(f"\nImprovement:")
+    print(f"\nHPWL Improvement:")
     print(f"  Mean: {np.mean(improvements):.1f}%")
     print(f"  Std:  {np.std(improvements):.1f}%")
     print(f"  Min:  {np.min(improvements):.1f}%")
     print(f"  Max:  {np.max(improvements):.1f}%")
+
+    print(f"\nTotal Energy Improvement:")
+    print(f"  Mean: {np.mean(energy_improvements):.1f}%")
+    print(f"  Std:  {np.std(energy_improvements):.1f}%")
+
+    print(f"\nOverlap Penalties:")
+    print(f"  Initial (mean): {np.mean(initial_overlaps):.4f}")
+    print(f"  Generated (mean): {np.mean(generated_overlaps):.4f}")
+    print(f"  ⚠ Generated overlaps should be NEAR ZERO for valid placements!")
+
+    print(f"\nBoundary Penalties:")
+    print(f"  Initial (mean): {np.mean(initial_boundaries):.4f}")
+    print(f"  Generated (mean): {np.mean(generated_boundaries):.4f}")
+    print(f"  ⚠ Generated boundaries should be NEAR ZERO for valid placements!")
 
     print("\n" + "=" * 80)
 
