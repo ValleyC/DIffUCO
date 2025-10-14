@@ -109,6 +109,17 @@ class ChipPlacementEnergyClass(BaseEnergyClass):
             self.boundary_weight * boundary_per_graph
         )
 
+        # DEBUG: Print energy components to diagnose stacking issue
+        # if jnp.mean(hpwl_per_graph) < 20:  # Only print when HPWL is suspiciously low
+        #     print(f"\n=== DEBUG ENERGY COMPONENTS ===")
+        #     print(f"HPWL per graph: {hpwl_per_graph}")
+        #     print(f"Overlap per graph: {overlap_per_graph}")
+        #     print(f"Boundary per graph: {boundary_per_graph}")
+        #     print(f"Component sizes (first 5): {component_sizes[:5]}")
+        #     print(f"Positions (first 5): {positions[:5]}")
+        #     print(f"Total Energy: {Energy_per_graph}")
+        #     print(f"================================\n")
+
         # Constraint violations (for monitoring)
         constraint_violations_per_graph = overlap_per_graph + boundary_per_graph
 
