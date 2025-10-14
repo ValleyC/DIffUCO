@@ -88,13 +88,13 @@ CHIP_PLACEMENT_CONFIG = {
     "relaxed": True,                       # Use relaxed (continuous) states
     "jit": True,                           # JIT compilation
 
-    # ===== Annealing Settings (Optional) =====
-    # For continuous chip placement, we typically don't use temperature annealing
-    # But these are kept for compatibility
-    "T_max": 0.0,                          # Maximum temperature (0 for no annealing)
-    "T_target": 0.0,                       # Target temperature
+    # ===== Annealing Settings =====
+    # Temperature controls exploration via entropy bonus: Loss = -T*H(policy) + ...
+    # Continuous space needs higher T than discrete (0.05) due to larger entropy
+    "T_max": 0.5,                          # Maximum temperature (10x discrete SDDS)
+    "T_target": 0.1,                       # Target temperature (maintain some exploration)
     "N_warmup": 0,                         # Warmup epochs
-    "N_anneal": 0,                         # Annealing epochs
+    "N_anneal": 500,                       # Annealing epochs (gradual reduction)
     "N_equil": 0,                          # Equilibration epochs
     "AnnealSchedule": "linear",            # Annealing schedule
 
