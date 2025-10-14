@@ -63,7 +63,11 @@ def compute_hpwl(positions, graph):
 
 
 def visualize_comparison(initial_pos, generated_pos, graph, component_sizes,
-                         initial_hpwl, generated_hpwl, instance_id, save_path=None):
+                         initial_hpwl, generated_hpwl,
+                         initial_energy, generated_energy,
+                         initial_overlap, generated_overlap,
+                         initial_boundary, generated_boundary,
+                         instance_id, save_path=None):
     """
     Visualize initial vs generated placement side-by-side
     """
@@ -72,14 +76,26 @@ def visualize_comparison(initial_pos, generated_pos, graph, component_sizes,
     placements = [initial_pos, generated_pos]
     titles = ["Initial Placement (Random)", "Generated Placement (Trained Model)"]
     hpwls = [initial_hpwl, generated_hpwl]
+    energies = [initial_energy, generated_energy]
+    overlaps = [initial_overlap, generated_overlap]
+    boundaries = [initial_boundary, generated_boundary]
 
     canvas_min, canvas_max = -1.0, 1.0
 
-    for ax_idx, (ax, positions, title, hpwl) in enumerate(zip(axes, placements, titles, hpwls)):
+    for ax_idx, (ax, positions, title, hpwl, energy, overlap, boundary) in enumerate(
+        zip(axes, placements, titles, hpwls, energies, overlaps, boundaries)):
         ax.set_xlim(canvas_min - 0.1, canvas_max + 0.1)
         ax.set_ylim(canvas_min - 0.1, canvas_max + 0.1)
         ax.set_aspect('equal')
-        ax.set_title(f"{title}\nHPWL = {hpwl:.2f}", fontsize=14, fontweight='bold')
+
+        # Enhanced title with all energy components
+        title_text = f"{title}\n"
+        title_text += f"HPWL = {hpwl:.2f} | "
+        title_text += f"Overlap = {overlap:.2f} | "
+        title_text += f"Boundary = {boundary:.2f}\n"
+        title_text += f"Total Energy = {energy:.2f}"
+
+        ax.set_title(title_text, fontsize=12, fontweight='bold')
         ax.set_xlabel('X position', fontsize=12)
         ax.set_ylabel('Y position', fontsize=12)
         ax.grid(True, alpha=0.3)
@@ -150,6 +166,29 @@ def visualize_comparison(initial_pos, generated_pos, graph, component_sizes,
     return fig
 
 
+def compute_full_energy(positions, graph, component_sizes, energy_fn):
+    """Compute HPWL, overlap, boundary penalties and total energy"""
+    node_gr_idx = jnp.zeros(positions.shape[0], dtype=jnp.int32)
+    n_graph = 1
+
+    # Compute total energy and components
+    energy, _, violations = energy_fn.calculate_Energy(graph, positions, node_gr_idx, component_sizes)
+
+    # Compute individual components
+    hpwl = energy_fn._compute_hpwl(graph, positions, node_gr_idx, n_graph)
+    overlap = energy_fn._compute_overlap_penalty(positions, component_sizes, node_gr_idx, n_graph)
+    boundary = energy_fn._compute_boundary_penalty(positions, component_sizes, node_gr_idx, n_graph)
+
+    return {
+        'hpwl': float(hpwl[0]),
+        'overlap_penalty': float(overlap[0]),
+        'boundary_penalty': float(boundary[0]),
+        'total_energy': float(energy[0, 0]),
+        'overlap_weighted': float(energy_fn.overlap_weight * overlap[0]),
+        'boundary_weighted': float(energy_fn.boundary_weight * boundary[0])
+    }
+
+
 def evaluate_instance(trainer, instance_data, instance_id):
     """
     Evaluate a single instance using the trained model
@@ -170,9 +209,14 @@ def evaluate_instance(trainer, instance_data, instance_id):
     print(f"\nEvaluating instance {instance_id}...")
     print(f"  Components: {component_sizes.shape[0]}")
 
-    # Compute initial HPWL
-    initial_hpwl = compute_hpwl(initial_positions, graph)
+    # Compute initial metrics
+    initial_energy_dict = compute_full_energy(initial_positions, graph, component_sizes, trainer.EnergyClass)
+    initial_hpwl = initial_energy_dict['hpwl']
+
     print(f"  Initial HPWL: {initial_hpwl:.2f}")
+    print(f"  Initial Overlap (raw): {initial_energy_dict['overlap_penalty']:.4f}")
+    print(f"  Initial Boundary (raw): {initial_energy_dict['boundary_penalty']:.4f}")
+    print(f"  Initial Total Energy: {initial_energy_dict['total_energy']:.2f}")
 
     # Prepare batch for model inference
     # Unwrap params from pmap (take first device replica)
@@ -222,31 +266,46 @@ def evaluate_instance(trainer, instance_data, instance_id):
 
         print(f"  Generated positions shape: {generated_positions.shape}")
 
-        # Compute generated HPWL
-        generated_hpwl = compute_hpwl(generated_positions, graph)
+        # Compute generated metrics
+        generated_energy_dict = compute_full_energy(generated_positions, graph, component_sizes, trainer.EnergyClass)
+        generated_hpwl = generated_energy_dict['hpwl']
 
-        improvement = (initial_hpwl - generated_hpwl) / initial_hpwl * 100
+        hpwl_improvement = (initial_hpwl - generated_hpwl) / initial_hpwl * 100
+        energy_improvement = (initial_energy_dict['total_energy'] - generated_energy_dict['total_energy']) / initial_energy_dict['total_energy'] * 100
 
         print(f"  Generated HPWL: {generated_hpwl:.2f}")
-        print(f"  Improvement: {improvement:.1f}%")
+        print(f"  Generated Overlap (raw): {generated_energy_dict['overlap_penalty']:.4f}")
+        print(f"  Generated Boundary (raw): {generated_energy_dict['boundary_penalty']:.4f}")
+        print(f"  Generated Total Energy: {generated_energy_dict['total_energy']:.2f}")
+        print(f"  HPWL Improvement: {hpwl_improvement:.1f}%")
+        print(f"  Energy Improvement: {energy_improvement:.1f}%")
 
     except Exception as e:
         print(f"  Error during inference: {e}")
         import traceback
         traceback.print_exc()
         generated_positions = initial_positions
+        generated_energy_dict = initial_energy_dict
         generated_hpwl = initial_hpwl
-        improvement = 0.0
+        hpwl_improvement = 0.0
+        energy_improvement = 0.0
 
     result = {
         'instance_id': instance_id,
         'initial_positions': initial_positions,
         'initial_hpwl': initial_hpwl,
+        'initial_energy': initial_energy_dict['total_energy'],
+        'initial_overlap': initial_energy_dict['overlap_penalty'],
+        'initial_boundary': initial_energy_dict['boundary_penalty'],
         'generated_positions': generated_positions,
         'generated_hpwl': generated_hpwl,
+        'generated_energy': generated_energy_dict['total_energy'],
+        'generated_overlap': generated_energy_dict['overlap_penalty'],
+        'generated_boundary': generated_energy_dict['boundary_penalty'],
         'graph': graph,
         'component_sizes': component_sizes,
-        'improvement': improvement,
+        'hpwl_improvement': hpwl_improvement,
+        'energy_improvement': energy_improvement,
     }
 
     return result
@@ -340,6 +399,12 @@ def main():
             result['component_sizes'],
             result['initial_hpwl'],
             result['generated_hpwl'],
+            result['initial_energy'],
+            result['generated_energy'],
+            result['initial_overlap'],
+            result['generated_overlap'],
+            result['initial_boundary'],
+            result['generated_boundary'],
             i,
             save_path=save_path
         )

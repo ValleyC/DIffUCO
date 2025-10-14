@@ -31,8 +31,8 @@ class ChipPlacementEnergyClass(BaseEnergyClass):
 
         # Chip placement specific parameters
         self.continuous_dim = config.get("continuous_dim", 2)
-        self.overlap_weight = config.get("overlap_weight", 100.0)  # Increased from 10 to 100
-        self.boundary_weight = config.get("boundary_weight", 100.0)  # Increased from 10 to 100
+        self.overlap_weight = config.get("overlap_weight", 10.0)
+        self.boundary_weight = config.get("boundary_weight", 10.0)
         self.canvas_width = config.get("canvas_width", 2.0)  # Default: [-1, 1] -> width = 2
         self.canvas_height = config.get("canvas_height", 2.0)
         self.canvas_x_min = config.get("canvas_x_min", -1.0)
