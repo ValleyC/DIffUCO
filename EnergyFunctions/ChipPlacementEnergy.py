@@ -31,15 +31,8 @@ class ChipPlacementEnergyClass(BaseEnergyClass):
 
         # Chip placement specific parameters
         self.continuous_dim = config.get("continuous_dim", 2)
-        # CRITICAL: Penalties must be strong enough to prevent component stacking/clustering!
-        # Analysis shows model learns to cluster near (1,1) with tiny offsets:
-        #   - Stacked (w=10): HPWL=6, penalties=21, total=27 ← WINS
-        #   - Spread (w=10): HPWL=497, penalties=0, total=497 ← LOSES
-        # With w=1000:
-        #   - Stacked: HPWL=6, penalties=2100, total=2106 ← LOSES
-        #   - Spread: HPWL=497, penalties=0, total=497 ← WINS
-        self.overlap_weight = config.get("overlap_weight", 1000.0)  # Increased from 10 to 1000
-        self.boundary_weight = config.get("boundary_weight", 1000.0)  # Increased from 10 to 1000
+        self.overlap_weight = config.get("overlap_weight", 10.0)
+        self.boundary_weight = config.get("boundary_weight", 10.0)
         self.canvas_width = config.get("canvas_width", 2.0)  # Default: [-1, 1] -> width = 2
         self.canvas_height = config.get("canvas_height", 2.0)
         self.canvas_x_min = config.get("canvas_x_min", -1.0)

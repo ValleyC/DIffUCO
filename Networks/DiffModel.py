@@ -353,16 +353,25 @@ class DiffModel(nn.Module):
 		node_graph_idx = jnp.repeat(graph_idx, n_node, axis=0, total_repeat_length=total_nodes)
 
 		if self.continuous_dim > 0:
-			# Continuous mode: X_T ~ N(0, I)
+			# Continuous mode: X_T ~ Uniform([-1, 1]^d)
 			# X_T shape: (num_nodes, n_basis_states, continuous_dim)
 			shape = X_T.shape[0:2]  # (num_nodes, n_basis_states)
-			prior_mean, prior_log_var = self._get_prior(shape)
+			bounds_min, bounds_max = self._get_prior(shape)
 
-			# Compute log p(X_T) = log N(X_T | 0, I)
-			# log N(x | mu, sigma^2) = -0.5 * [(x-mu)^2/sigma^2 + log(sigma^2) + log(2*pi)]
-			# For N(0, I): log N(x | 0, I) = -0.5 * [x^2 + log(2*pi)]
-			log_p_per_dim = -0.5 * (X_T**2 + jnp.log(2 * jnp.pi))  # (num_nodes, n_basis_states, continuous_dim)
-			log_p_X_T_per_node = jnp.sum(log_p_per_dim, axis=-1)  # Sum over continuous_dim -> (num_nodes, n_basis_states)
+			# Compute log p(X_T) = log Uniform(X_T | [-1, 1]^d)
+			# For uniform distribution: p(x) = 1/volume if x in bounds, else 0
+			# volume = (max - min)^d = 2^d for [-1, 1]^d
+			# log p(x) = -d * log(2) = -continuous_dim * log(2)
+
+			# Check if samples are within bounds
+			in_bounds = jnp.logical_and(
+				jnp.all(X_T >= bounds_min, axis=-1),
+				jnp.all(X_T <= bounds_max, axis=-1)
+			)  # (num_nodes, n_basis_states)
+
+			# Log probability per sample
+			log_p_uniform = -self.continuous_dim * jnp.log(2.0)
+			log_p_X_T_per_node = jnp.where(in_bounds, log_p_uniform, -jnp.inf)
 
 			# IMPORTANT: Keep the basis_states dimension!
 			# Each basis state has independent log probability
@@ -386,7 +395,7 @@ class DiffModel(nn.Module):
 		Sample from prior distribution.
 
 		For discrete: sample from uniform categorical
-		For continuous: sample from standard Gaussian N(0, I)
+		For continuous: sample from Uniform([-1, 1]^d) to match chip canvas bounds
 		"""
 		nodes = j_graph.nodes
 		num_nodes = nodes.shape[0]
@@ -394,18 +403,18 @@ class DiffModel(nn.Module):
 		key, subkey = jax.random.split(key)
 
 		if self.continuous_dim > 0:
-			# Continuous mode: sample from N(0, I)
+			# Continuous mode: sample from Uniform([-1, 1]^d)
 			shape = (num_nodes, N_basis_states)
-			prior_mean, prior_log_var = self._get_prior(shape)
+			bounds_min, bounds_max = self._get_prior(shape)
 
-			# Sample using reparameterization
-			epsilon = jax.random.normal(subkey, shape=prior_mean.shape)
-			X_prev = prior_mean + jnp.exp(0.5 * prior_log_var) * epsilon
+			# Sample uniform in [0, 1] then scale to [-1, 1]
+			uniform_01 = jax.random.uniform(subkey, shape=bounds_min.shape)
+			X_prev = bounds_min + (bounds_max - bounds_min) * uniform_01
 
 			# For continuous, we don't have one_hot_state
-			# Return X_prev as-is, and prior params
+			# Return X_prev as-is, and prior params (bounds)
 			one_hot_state = None  # Not applicable for continuous
-			prior_params = (prior_mean, prior_log_var)
+			prior_params = (bounds_min, bounds_max)
 			return X_prev, one_hot_state, prior_params, key
 		else:
 			# Discrete mode: sample from uniform categorical
@@ -432,7 +441,7 @@ class DiffModel(nn.Module):
 		Get prior distribution.
 
 		For discrete: uniform categorical distribution
-		For continuous: standard Gaussian N(0, I)
+		For continuous: Uniform([-1, 1]^d) to match bounded chip canvas
 
 		Args:
 			shape: Base shape (num_nodes, N_basis_states, 1) for discrete
@@ -440,14 +449,14 @@ class DiffModel(nn.Module):
 
 		Returns:
 			For discrete: log probabilities of uniform categorical
-			For continuous: tuple of (mean, log_var) for standard Gaussian
+			For continuous: tuple of (bounds_min, bounds_max) for uniform distribution
 		"""
 		if self.continuous_dim > 0:
-			# Continuous prior: N(0, I)
-			# Mean = 0, log_var = log(1) = 0
-			mean = jnp.zeros(shape + (self.continuous_dim,))
-			log_var = jnp.zeros(shape + (self.continuous_dim,))
-			return mean, log_var
+			# Continuous prior: Uniform([-1, 1]^d)
+			# This ensures 100% of prior samples are within the chip canvas bounds
+			bounds_min = -jnp.ones(shape + (self.continuous_dim,))
+			bounds_max = jnp.ones(shape + (self.continuous_dim,))
+			return bounds_min, bounds_max
 		else:
 			# Discrete prior: uniform categorical
 			log_p_uniform = jnp.log(1./self.n_bernoulli_features * jnp.ones(shape +  (self.n_bernoulli_features, )))
