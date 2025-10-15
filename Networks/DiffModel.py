@@ -248,7 +248,12 @@ class DiffModel(nn.Module):
 			# Reparameterization trick: X = mean + std * epsilon
 			epsilon = jax.random.normal(subkey, shape=position_mean.shape)
 			std = jnp.exp(0.5 * position_log_var)
-			X_next = position_mean + std * epsilon
+			X_next_unbounded = position_mean + std * epsilon
+
+			# CRITICAL: Clip to canvas bounds [-1, 1] to prevent out-of-bounds samples
+			# Without clipping, large std can push samples far outside bounds,
+			# causing model to collapse variance and stack components to minimize penalties
+			X_next = jnp.clip(X_next_unbounded, -1.0, 1.0)
 
 			# Compute log probability: log N(X | mean, var)
 			# log p = -0.5 * [epsilon^2 + log_var + log(2*pi)]
