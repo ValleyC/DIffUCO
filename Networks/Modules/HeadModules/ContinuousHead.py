@@ -89,11 +89,14 @@ class ContinuousHead(nn.Module):
         # embeddings shape: [num_components, 1, embedding_dim]
         # We keep the middle dimension (1) for compatibility with existing code structure
 
-        # Predict mean: bounded to [-1, 1] range using tanh
-        # For chip placement, canvas is typically [-1, 1] x [-1, 1]
-        # Using tanh ensures positions stay within reasonable bounds
+        # Predict mean: NO activation (unbounded)
+        # FIX: Removed tanh! It was causing edge-stacking bias:
+        # - tanh saturates at ±1 → components stick to edges/corners
+        # - tanh gradient near ±1 is ~0 → model gets stuck
+        # Instead, rely on hard boundary clipping in PPO_Trainer (after sampling)
+        # This allows model to predict ANY position, clipped only during execution
         position_mean_unbounded = self.mean_layer(embeddings)  # [num_components, 1, continuous_dim]
-        position_mean = jnp.tanh(position_mean_unbounded)  # Bound to [-1, 1]
+        position_mean = position_mean_unbounded  # NO TANH!
 
         # Predict log variance: clip to prevent numerical instability
         # log_var in [-10, 2] corresponds to std in [exp(-5)=0.0067, exp(1)=2.718]
@@ -194,9 +197,10 @@ class ContinuousHeadChip(nn.Module):
             size_features = jnp.expand_dims(size_features, axis=1)  # [num_components, 1, 32]
             embeddings = jnp.concatenate([embeddings, size_features], axis=-1)
 
-        # Predict positions: bound to [-1, 1] using tanh
+        # Predict positions: NO activation (unbounded)
+        # FIX: Removed tanh to prevent edge-stacking bias (same fix as ContinuousHead)
         position_mean_unbounded = self.mean_layer(embeddings)
-        position_mean = jnp.tanh(position_mean_unbounded)
+        position_mean = position_mean_unbounded  # NO TANH!
         position_log_var = self.log_var_layer(embeddings)
         position_log_var = jnp.clip(position_log_var, -10.0, 2.0)
 
