@@ -324,6 +324,14 @@ class TrainMeanField:
 		else:
 			loaded_dict = self._load_last_epoch()
 			loaded_config = loaded_dict["config"]
+			# OVERRIDE: Allow updating overlap_weight from new config
+			# This is needed when checkpoint has old weight but we want to use new weight
+			if "overlap_weight" in config and config["overlap_weight"] != loaded_config.get("overlap_weight", 10.0):
+				print(f"⚠️  OVERRIDING overlap_weight: {loaded_config.get('overlap_weight', 10.0)} → {config['overlap_weight']}")
+				loaded_config["overlap_weight"] = config["overlap_weight"]
+			if "boundary_weight" in config and config["boundary_weight"] != loaded_config.get("boundary_weight", 10.0):
+				print(f"⚠️  OVERRIDING boundary_weight: {loaded_config.get('boundary_weight', 10.0)} → {config['boundary_weight']}")
+				loaded_config["boundary_weight"] = config["boundary_weight"]
 			return loaded_config
 
 	def __init_network(self):
@@ -1256,8 +1264,11 @@ class TrainMeanField:
 		else:
 			mean_normed_free_energy = np.nan
 
-		energies = np.array(normed_energies * self.std_energy + self.mean_energy)
-		gt_energies = np.array(gt_normed_energies * self.std_energy + self.mean_energy)
+		# DISABLE normalization - use raw energies so overlap_weight changes take effect immediately
+		# When overlap_weight changes, dataset normalization stats are outdated
+		# For RL, raw energies work fine (not supervised learning)
+		energies = np.array(normed_energies)  # Use raw energies
+		gt_energies = np.array(gt_normed_energies)  # Use raw GT energies
 		gt_energies = np.expand_dims(gt_energies, axis=-1)
 		gt_energies = gt_energies[:energies.shape[0]]
 
