@@ -465,7 +465,15 @@ class TrainMeanField:
 			# For continuous mode, X_prev should have shape (num_nodes, continuous_dim)
 			# For discrete mode, X_prev should have shape (num_nodes, 1)
 			state_dim = self.config.get("continuous_dim", 0) if self.config.get("continuous_dim", 0) > 0 else 1
-			X_prev = jnp.ones((batched_graph.nodes.shape[1], state_dim))
+
+			# CRITICAL FIX: Use random initialization for continuous mode to prevent stacking at (1,1)
+			if state_dim > 1:  # Continuous mode (e.g., chip placement)
+				self.key, subkey_init = jax.random.split(self.key)
+				# Random uniform in [-1, 1] to spread components across canvas
+				X_prev = jax.random.uniform(subkey_init, shape=(batched_graph.nodes.shape[1], state_dim)) * 2 - 1
+			else:  # Discrete mode (e.g., TSP, MaxCut)
+				X_prev = jnp.ones((batched_graph.nodes.shape[1], state_dim))
+
 			rand_node_features = jnp.ones((batched_graph.nodes.shape[1], self.n_random_node_features))
 
 			input_graph_list = {"graphs": [jax.tree_util.tree_map(lambda x: x[0], input_graph_list["graphs"][0])]}
