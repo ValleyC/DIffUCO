@@ -66,7 +66,7 @@ parser.add_argument('--sampling-temp', default=0., type = float, help='define sa
 parser.add_argument('--n_sampling_rounds', default=5, type = int, help='how often the the basis states are sampled in a loop in unbiased estimations')
 parser.add_argument('--bfloat16', action='store_true')
 parser.add_argument('--no-bfloat16', dest='bfloat16', action='store_false')
-parser.add_argument('--overlap_weight', default=500.0, type=float, help='Overlap penalty weight for chip placement')
+parser.add_argument('--overlap_weight', default=1000.0, type=float, help='Overlap penalty weight for chip placement')
 parser.add_argument('--boundary_weight', default=0.0, type=float, help='Boundary penalty weight for chip placement')
 parser.set_defaults(bfloat16=False)
 
