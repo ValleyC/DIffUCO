@@ -66,6 +66,8 @@ parser.add_argument('--sampling-temp', default=0., type = float, help='define sa
 parser.add_argument('--n_sampling_rounds', default=5, type = int, help='how often the the basis states are sampled in a loop in unbiased estimations')
 parser.add_argument('--bfloat16', action='store_true')
 parser.add_argument('--no-bfloat16', dest='bfloat16', action='store_false')
+parser.add_argument('--overlap_weight', default=500.0, type=float, help='Overlap penalty weight for chip placement')
+parser.add_argument('--boundary_weight', default=0.0, type=float, help='Boundary penalty weight for chip placement')
 parser.set_defaults(bfloat16=False)
 
 parser.set_defaults(CE=False)
@@ -250,6 +252,8 @@ def detect_and_run_for_loops():
                                             # Add continuous_dim for ChipPlacement
                                             if args.EnergyFunction == "ChipPlacement":
                                                 flexible_config["continuous_dim"] = 2
+                                                flexible_config["overlap_weight"] = args.overlap_weight
+                                                flexible_config["boundary_weight"] = args.boundary_weight
 
                                             run(flexible_config=flexible_config, overwrite=True)
 
