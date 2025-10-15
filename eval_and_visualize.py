@@ -40,6 +40,52 @@ def load_test_data(dataset_name="Chip_small", mode="test"):
     return data
 
 
+def clip_positions_to_bounds(positions, component_sizes, canvas_x_min=-1.0, canvas_y_min=-1.0,
+                            canvas_width=2.0, canvas_height=2.0):
+    """
+    Hard boundary enforcement: Clip component positions to ensure ENTIRE component stays within canvas bounds.
+
+    For a component with center (x, y) and size (w, h):
+    - Component occupies [x - w/2, x + w/2] × [y - h/2, y + h/2]
+    - To keep entire component in canvas:
+      - Center x must be in [x_min + w/2, x_max - w/2]
+      - Center y must be in [y_min + h/2, y_max - h/2]
+
+    Args:
+        positions: [num_components, 2] array of (x, y) positions
+        component_sizes: [num_components, 2] array of (width, height)
+        canvas_x_min, canvas_y_min: canvas lower-left corner
+        canvas_width, canvas_height: canvas dimensions
+
+    Returns:
+        clipped_positions: [num_components, 2] array with positions clipped to valid bounds
+    """
+    positions = np.array(positions)
+    component_sizes = np.array(component_sizes)
+
+    # Half sizes
+    half_sizes = component_sizes / 2.0  # [num_components, 2]
+
+    # Canvas bounds
+    canvas_x_max = canvas_x_min + canvas_width
+    canvas_y_max = canvas_y_min + canvas_height
+
+    # Valid center bounds (accounting for component size)
+    x_min_valid = canvas_x_min + half_sizes[:, 0]  # [num_components,]
+    x_max_valid = canvas_x_max - half_sizes[:, 0]
+    y_min_valid = canvas_y_min + half_sizes[:, 1]
+    y_max_valid = canvas_y_max - half_sizes[:, 1]
+
+    # Clip x and y coordinates
+    x_clipped = np.clip(positions[:, 0], x_min_valid, x_max_valid)
+    y_clipped = np.clip(positions[:, 1], y_min_valid, y_max_valid)
+
+    # Reconstruct positions
+    clipped_positions = np.stack([x_clipped, y_clipped], axis=-1)
+
+    return clipped_positions
+
+
 def compute_hpwl(positions, graph):
     """Compute Half-Perimeter Wirelength"""
     senders = graph.senders
@@ -265,6 +311,21 @@ def evaluate_instance(trainer, instance_data, instance_id):
             raise ValueError(f"Unexpected X_0 shape: {X_0.shape}")
 
         print(f"  Generated positions shape: {generated_positions.shape}")
+
+        # HARD BOUNDARY ENFORCEMENT: Clip positions to ensure entire components stay in bounds
+        # This matches the behavior during training
+        canvas_x_min = getattr(trainer.EnergyClass, 'canvas_x_min', -1.0)
+        canvas_y_min = getattr(trainer.EnergyClass, 'canvas_y_min', -1.0)
+        canvas_width = getattr(trainer.EnergyClass, 'canvas_width', 2.0)
+        canvas_height = getattr(trainer.EnergyClass, 'canvas_height', 2.0)
+
+        generated_positions = clip_positions_to_bounds(
+            generated_positions,
+            component_sizes,
+            canvas_x_min, canvas_y_min,
+            canvas_width, canvas_height
+        )
+        print(f"  Applied hard boundary enforcement (clipped positions to valid bounds)")
 
         # Compute generated metrics
         generated_energy_dict = compute_full_energy(generated_positions, graph, component_sizes, trainer.EnergyClass)

@@ -300,6 +300,12 @@ class PPO(Base):
                                                  batched_key)
 
         X_next = out_dict["X_next"]
+
+        # HARD BOUNDARY ENFORCEMENT: Clip component positions to ensure ENTIRE component stays in bounds
+        # For continuous mode, ensure components don't go out of canvas
+        if hasattr(self, 'continuous_dim') and self.continuous_dim > 0:
+            X_next = self._clip_positions_to_bounds(X_next, energy_graph_batch)
+
         state_log_probs = out_dict["state_log_probs"]
         graph_log_prob = out_dict["graph_log_prob"]
         Values = out_dict["Values"]
@@ -557,6 +563,78 @@ class PPO(Base):
         unpadded_adv = advantages[:,:,:-1]
         normed_advantages = (advantages - jnp.mean(unpadded_adv))/(jnp.std(unpadded_adv)+10**-10)
         return normed_advantages
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _clip_positions_to_bounds(self, positions, energy_graph_batch):
+        """
+        Hard boundary enforcement: Clip component positions to ensure ENTIRE component stays within canvas bounds.
+
+        For a component with center (x, y) and size (w, h):
+        - Component occupies [x - w/2, x + w/2] × [y - h/2, y + h/2]
+        - To keep entire component in canvas [-1, 1]²:
+          - Center x must be in [-1 + w/2, 1 - w/2]
+          - Center y must be in [-1 + h/2, 1 - h/2]
+
+        Args:
+            positions: [num_components, N_basis_states, continuous_dim] or [num_components, continuous_dim]
+            energy_graph_batch: jraph graph containing component sizes in nodes
+
+        Returns:
+            clipped_positions: same shape as input, with positions clipped to valid bounds
+        """
+        # Extract component sizes from graph nodes
+        # Assume nodes contain [width, height, ...] in first 2 features
+        nodes = energy_graph_batch.nodes
+        if nodes.shape[-1] >= 2:
+            component_sizes = nodes[:, :2]  # [num_components, 2]
+        else:
+            # Default: small components (0.1 x 0.1)
+            component_sizes = jnp.full((nodes.shape[0], 2), 0.1)
+
+        # Half sizes
+        half_sizes = component_sizes / 2.0  # [num_components, 2]
+
+        # Canvas bounds from config (default: [-1, 1]²)
+        canvas_x_min = getattr(self.EnergyClass, 'canvas_x_min', -1.0)
+        canvas_y_min = getattr(self.EnergyClass, 'canvas_y_min', -1.0)
+        canvas_width = getattr(self.EnergyClass, 'canvas_width', 2.0)
+        canvas_height = getattr(self.EnergyClass, 'canvas_height', 2.0)
+
+        canvas_x_max = canvas_x_min + canvas_width
+        canvas_y_max = canvas_y_min + canvas_height
+
+        # Valid center bounds (accounting for component size)
+        # Center must be at least half_size away from canvas edge
+        x_min_valid = canvas_x_min + half_sizes[:, 0]  # [num_components,]
+        x_max_valid = canvas_x_max - half_sizes[:, 0]
+        y_min_valid = canvas_y_min + half_sizes[:, 1]
+        y_max_valid = canvas_y_max - half_sizes[:, 1]
+
+        # Handle different position shapes
+        if len(positions.shape) == 3:
+            # Shape: [num_components, N_basis_states, continuous_dim]
+            # Broadcast bounds: [num_components, 1]
+            x_min_valid = x_min_valid[:, jnp.newaxis]
+            x_max_valid = x_max_valid[:, jnp.newaxis]
+            y_min_valid = y_min_valid[:, jnp.newaxis]
+            y_max_valid = y_max_valid[:, jnp.newaxis]
+
+            # Clip x and y coordinates
+            x_clipped = jnp.clip(positions[:, :, 0], x_min_valid, x_max_valid)
+            y_clipped = jnp.clip(positions[:, :, 1], y_min_valid, y_max_valid)
+
+            # Reconstruct positions
+            clipped_positions = jnp.stack([x_clipped, y_clipped], axis=-1)
+        else:
+            # Shape: [num_components, continuous_dim]
+            # Clip x and y coordinates
+            x_clipped = jnp.clip(positions[:, 0], x_min_valid, x_max_valid)
+            y_clipped = jnp.clip(positions[:, 1], y_min_valid, y_max_valid)
+
+            # Reconstruct positions
+            clipped_positions = jnp.stack([x_clipped, y_clipped], axis=-1)
+
+        return clipped_positions
 
     def get_loss(self, params, jraph_graph_list, batch_dict, key):
         return self.PPO_loss(params, jraph_graph_list, batch_dict, key)
