@@ -76,7 +76,7 @@ CHIP_PLACEMENT_CONFIG = {
 
     # ===== Energy Function Settings =====
     # ChipPlacementEnergy parameters
-    "overlap_weight": 10.0,                # Penalty weight for component overlaps
+    "overlap_weight": 500.0,               # Penalty weight for component overlaps (must be >> HPWL to prevent clustering)
     "boundary_weight": 0.0,                # DISABLED: Hard boundary enforcement in trainer (no soft penalty needed)
     "canvas_width": 2.0,                   # Canvas width (x: [-1, 1])
     "canvas_height": 2.0,                  # Canvas height (y: [-1, 1])
