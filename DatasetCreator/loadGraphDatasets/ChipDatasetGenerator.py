@@ -103,13 +103,19 @@ class ChipDatasetGenerator(BaseDatasetGenerator):
             hpwl: float, Half-Perimeter Wirelength
         """
 
-        # 1. Sample number of components and target density
-        num_components = int(self._sample_uniform(20, 50))  # Fewer components for SDDS
-        stop_density = self._sample_uniform(0.6, 0.85)
+        # 1. Sample target density first
+        stop_density = self._sample_uniform(0.75, 0.90)  # Match ChipDiffusion: high density (75-90%)
 
-        # 2. Generate component sizes
+        # 2. Generate enough components to reach target density
+        # Since exponential distribution creates mostly small components (~0.01 area),
+        # we need MANY components to reach 75-90% density
+        canvas_area = 4.0  # 2x2 canvas
+        target_area = stop_density * canvas_area  # e.g., 0.85 * 4 = 3.4 area units needed
+
+        # Start with initial batch
+        num_components = int(self._sample_uniform(100, 300))  # INCREASED: need many small components
         aspect_ratios = self._sample_uniform(0.25, 1.0, (num_components,))
-        long_sizes = self._sample_clipped_exp(scale=0.08, low=0.02, high=0.5,
+        long_sizes = self._sample_clipped_exp(scale=0.08, low=0.02, high=1.0,
                                                size=(num_components,))
         short_sizes = aspect_ratios * long_sizes
 
@@ -118,17 +124,65 @@ class ChipDatasetGenerator(BaseDatasetGenerator):
         x_sizes = long_x * long_sizes + (1 - long_x) * short_sizes
         y_sizes = (1 - long_x) * long_sizes + long_x * short_sizes
 
+        # Check if total area is sufficient for target density
+        total_area = (x_sizes * y_sizes).sum().item()
+        if total_area < target_area:
+            # Need more components - scale up
+            scale_factor = (target_area / total_area) * 1.2  # 20% buffer
+            num_additional = int((num_components * scale_factor) - num_components)
+            if num_additional > 0:
+                # Generate additional components
+                add_aspect_ratios = self._sample_uniform(0.25, 1.0, (num_additional,))
+                add_long_sizes = self._sample_clipped_exp(scale=0.08, low=0.02, high=1.0,
+                                                          size=(num_additional,))
+                add_short_sizes = add_aspect_ratios * add_long_sizes
+
+                add_long_x = (torch.rand(num_additional) > 0.5).float()
+                add_x_sizes = add_long_x * add_long_sizes + (1 - add_long_x) * add_short_sizes
+                add_y_sizes = (1 - add_long_x) * add_long_sizes + add_long_x * add_short_sizes
+
+                # Concatenate
+                x_sizes = torch.cat([x_sizes, add_x_sizes])
+                y_sizes = torch.cat([y_sizes, add_y_sizes])
+                num_components += num_additional
+
         # 3. Generate NETLIST FIRST (independent of placement!)
         edge_index, edge_attr, num_terminals = self._generate_netlist_random_graph(
             num_components, x_sizes, y_sizes
         )
 
         # 4. Generate PLACEMENT SECOND (independent of netlist!)
-        positions, placed_sizes, actual_density = self._place_components_legal(
+        positions, placed_sizes, actual_density, placed_indices = self._place_components_legal(
             x_sizes, y_sizes, stop_density
         )
 
-        # 5. Compute HPWL (will be high - that's correct!)
+        # 5. Filter edges to only include placed components
+        # Create mapping from original indices to placed indices
+        index_map = {orig_idx: new_idx for new_idx, orig_idx in enumerate(placed_indices)}
+
+        # Filter edges where both endpoints were placed
+        valid_edges = []
+        valid_edge_attrs = []
+        for i in range(edge_index.shape[1]):
+            src, dst = edge_index[0, i].item(), edge_index[1, i].item()
+            if src in index_map and dst in index_map:
+                # Both endpoints placed - remap indices
+                valid_edges.append([index_map[src], index_map[dst]])
+                valid_edge_attrs.append(edge_attr[i])
+
+        if len(valid_edges) > 0:
+            edge_index = torch.tensor(valid_edges, dtype=torch.long).T
+            edge_attr = torch.stack(valid_edge_attrs)
+        else:
+            # No valid edges - create fallback
+            if len(positions) > 1:
+                edge_index = torch.tensor([[0], [1]], dtype=torch.long)
+                edge_attr = torch.zeros((1, 4))
+            else:
+                edge_index = torch.zeros((2, 0), dtype=torch.long)
+                edge_attr = torch.zeros((0, 4))
+
+        # 6. Compute HPWL (will be high - that's correct!)
         hpwl = self._compute_hpwl(positions, placed_sizes, edge_index, edge_attr)
 
         # 6. Create PyG Data object
@@ -185,16 +239,16 @@ class ChipDatasetGenerator(BaseDatasetGenerator):
                 node2 = list(components[i + 1])[0]
                 G.add_edge(node1, node2)
 
-        # Generate terminals for each component
+        # Generate terminals for each component (Rent's Rule: T = t * A^p)
         areas = x_sizes * y_sizes
         num_terminals = self._sample_conditional_binomial(
             areas,
             binom_p=0.5,
-            binom_min_n=2,  # Minimum 2 terminals
-            t=64,  # Reduced from 128
+            binom_min_n=4,  # Match ChipDiffusion: minimum 4 terminals
+            t=128,  # Match ChipDiffusion: t=128 (not 64)
             p=0.65
         )
-        num_terminals = torch.clamp(num_terminals, min=2, max=128).int()
+        num_terminals = torch.clamp(num_terminals, min=4, max=128).int()  # Enforce min=4
         max_num_terminals = torch.max(num_terminals)
 
         # Terminal offsets relative to component center
@@ -242,6 +296,11 @@ class ChipDatasetGenerator(BaseDatasetGenerator):
         Place components randomly (legal but NOT HPWL-optimized)
         This is the "simple solution" analogous to TSP's sequential tour.
 
+        NEW: Allows overlaps during dataset generation!
+        - Only enforces boundary constraints (no out-of-bounds)
+        - Model learns to remove overlaps during training
+        - Enables high-density datasets (75-90%) like ChipDiffusion
+
         Args:
             x_sizes: (V,) tensor
             y_sizes: (V,) tensor
@@ -251,6 +310,7 @@ class ChipDatasetGenerator(BaseDatasetGenerator):
             positions: (V, 2) tensor
             sizes: (V, 2) tensor (actually placed)
             density: float (actual density achieved)
+            placed_indices: list of original component indices that were placed
         """
         placement = ChipPlacement()
         density = 0.0
@@ -267,22 +327,27 @@ class ChipDatasetGenerator(BaseDatasetGenerator):
             x_size_val = float(x_size)
             y_size_val = float(y_size)
 
-            # Calculate valid position range
+            # Calculate valid position range (centered at origin, no out-of-bounds)
             low = torch.tensor([(x_size_val/2) - 1.0, (y_size_val/2) - 1.0])
             high = torch.tensor([1.0 - (x_size_val/2), 1.0 - (y_size_val/2)])
 
-            # Check if component fits
+            # Check if component fits in canvas
             if (low >= high).any():
-                continue  # Component too large, skip
+                continue  # Component too large for canvas, skip
 
+            # Since we allow overlaps and only check boundaries,
+            # boundary check should succeed on first attempt (or very quickly)
+            # If component fits, just place it randomly!
             placed = False
-            for attempt in range(self.max_attempts_per_instance):
-                # Random position (don't consider netlist connectivity!)
+            for attempt in range(100):  # Should succeed immediately
+                # Random position within valid bounds
                 candidate_pos = torch.rand(2) * (high - low) + low
 
+                # Only check boundaries, allow overlaps (check_overlap=False)
                 if placement.check_legality(candidate_pos[0].item(),
                                            candidate_pos[1].item(),
-                                           x_size_val, y_size_val):
+                                           x_size_val, y_size_val,
+                                           check_overlap=False):
                     placement.commit_instance(candidate_pos[0].item(),
                                             candidate_pos[1].item(),
                                             x_size_val, y_size_val)
@@ -290,9 +355,19 @@ class ChipDatasetGenerator(BaseDatasetGenerator):
                     placed = True
                     break
 
-            if placed:
-                density += (x_size_val * y_size_val) / 4.0
+            if not placed:
+                # This should rarely happen - only if component literally doesn't fit
+                # Place it anyway at canvas center (model will need to fix it)
+                center_pos = torch.tensor([0.0, 0.0])
+                placement.commit_instance(center_pos[0].item(),
+                                        center_pos[1].item(),
+                                        x_size_val, y_size_val)
+                placed_components.append(indices[idx].item())
 
+            density += (x_size_val * y_size_val) / 4.0
+
+            # Stop when target density reached (ChipDiffusion: 75-90%)
+            # This respects the density limits, allowing overlaps but not exceeding target
             if density >= stop_density:
                 break
 
@@ -300,7 +375,7 @@ class ChipDatasetGenerator(BaseDatasetGenerator):
         positions = placement.get_positions()
         sizes = placement.get_sizes()
 
-        return positions, sizes, density
+        return positions, sizes, density, placed_components
 
     # ========== Helper Methods (from original) ==========
 
@@ -445,24 +520,29 @@ class ChipPlacement:
         self.chip_bounds = shapely.box(-1, -1, 1, 1)
         self.eps = 1e-8
 
-    def check_legality(self, x_pos, y_pos, x_size, y_size):
+    def check_legality(self, x_pos, y_pos, x_size, y_size, check_overlap=True):
         """
         Check if placing component at (x_pos, y_pos) is legal
         Positions are center coordinates
+
+        Args:
+            check_overlap: If True, check for overlaps (default for backward compatibility)
+                          If False, only check boundaries (allows high-density datasets)
         """
         candidate = shapely.box(
             x_pos - x_size/2, y_pos - y_size/2,
             x_pos + x_size/2, y_pos + y_size/2
         )
 
-        # Check chip boundary
+        # Check chip boundary (always enforced)
         if not self.chip_bounds.contains(candidate):
             return False
 
-        # Check overlap with existing instances
-        for inst in self.instances:
-            if inst.intersects(candidate):
-                return False
+        # Check overlap with existing instances (optional)
+        if check_overlap:
+            for inst in self.instances:
+                if inst.intersects(candidate):
+                    return False
 
         return True
 
