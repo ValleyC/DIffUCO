@@ -76,8 +76,10 @@ CHIP_PLACEMENT_CONFIG = {
 
     # ===== Energy Function Settings =====
     # ChipPlacementEnergy parameters
-    "overlap_weight": 500.0,               # Penalty weight for component overlaps (must be >> HPWL to prevent clustering)
-    "boundary_weight": 0.0,                # DISABLED: Hard boundary enforcement in trainer (no soft penalty needed)
+    "overlap_weight": 5000.0,              # Penalty weight for component overlaps (must be >> HPWL to prevent clustering)
+    "boundary_weight": 5000.0,             # CRITICAL: Penalty for out-of-bounds positions (MUST be high to prevent edge-stacking!)
+                                           # During training, positions are NOT clipped, so boundary penalty teaches model to stay in bounds
+                                           # During eval, positions ARE clipped for valid output
     "canvas_width": 2.0,                   # Canvas width (x: [-1, 1])
     "canvas_height": 2.0,                  # Canvas height (y: [-1, 1])
     "canvas_x_min": -1.0,                  # Canvas x minimum

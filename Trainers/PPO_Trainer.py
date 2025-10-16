@@ -303,7 +303,16 @@ class PPO(Base):
 
         # HARD BOUNDARY ENFORCEMENT: Clip component positions to ensure ENTIRE component stays in bounds
         # For continuous mode, ensure components don't go out of canvas
-        if hasattr(self, 'continuous_dim') and self.continuous_dim > 0:
+        #
+        # CRITICAL FIX: Only clip during EVALUATION, NOT during training!
+        # During training, we need to calculate energy on UNCLIPPED positions so the model
+        # learns that out-of-bounds predictions are bad (via boundary_weight penalty).
+        # If we clip before energy calculation, the model is REWARDED for predicting
+        # out-of-bounds positions because clipping makes them look valid!
+        mode = scan_dict.get("mode", "train")  # Default to train if not specified
+        if hasattr(self, 'continuous_dim') and self.continuous_dim > 0 and mode != "train":
+            # Only clip in eval mode (mode != "train")
+            # In training, boundary penalty will teach model to stay in bounds
             X_next = self._clip_positions_to_bounds(X_next, energy_graph_batch)
 
         state_log_probs = out_dict["state_log_probs"]
@@ -402,7 +411,7 @@ class PPO(Base):
         node_gr_idx, n_graph, total_num_nodes = self._compute_aggr_utils(energy_graph_batch)
         scan_dict = {"log_policies": log_policies, "Xs_over_different_steps": Xs_over_different_steps, "prob_over_diff_steps": prob_over_diff_steps, "noise_rewards": noise_rewards, "entropy_rewards": entropy_rewards,
                     "Values_over_diff_steps": Values_over_diff_steps, "rand_node_features_diff_steps":rand_node_features_diff_steps,
-                    "step": 0, "node_gr_idx": node_gr_idx, "params": params, "key": key, "X_prev": X_prev, "graphs": graphs, "energy_graph_batch": energy_graph_batch, "T": T}
+                    "step": 0, "node_gr_idx": node_gr_idx, "params": params, "key": key, "X_prev": X_prev, "graphs": graphs, "energy_graph_batch": energy_graph_batch, "T": T, "mode": mode}
 
         scan_dict, out_dict_list = jax.lax.scan(self.scan_body, scan_dict, None, length = overall_diffusion_steps)
 
