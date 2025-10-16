@@ -66,8 +66,8 @@ parser.add_argument('--sampling-temp', default=0., type = float, help='define sa
 parser.add_argument('--n_sampling_rounds', default=5, type = int, help='how often the the basis states are sampled in a loop in unbiased estimations')
 parser.add_argument('--bfloat16', action='store_true')
 parser.add_argument('--no-bfloat16', dest='bfloat16', action='store_false')
-parser.add_argument('--overlap_weight', default=1000.0, type=float, help='Overlap penalty weight for chip placement')
-parser.add_argument('--boundary_weight', default=0.0, type=float, help='Boundary penalty weight for chip placement')
+parser.add_argument('--overlap_weight', default=5000.0, type=float, help='Overlap penalty weight for chip placement')
+parser.add_argument('--boundary_weight', default=5000.0, type=float, help='Boundary penalty weight for chip placement (CRITICAL: must be high to prevent edge-stacking!)')
 parser.set_defaults(bfloat16=False)
 
 parser.set_defaults(CE=False)
@@ -329,8 +329,8 @@ def run( flexible_config, overwrite = True):
         "clip_value": 0.2,
         "value_weighting": 0.65,
         "continuous_dim": 0,  # Default 0 for discrete; set to 2 for ChipPlacement
-        "overlap_weight": 10.0,  # Default for chip placement
-        "boundary_weight": 10.0  # Default for chip placement
+        "overlap_weight": 5000.0,  # Default for chip placement
+        "boundary_weight": 5000.0  # CRITICAL: Default for chip placement (must be high!)
     }
 
     if(overwrite):
