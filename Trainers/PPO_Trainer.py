@@ -301,20 +301,21 @@ class PPO(Base):
 
         X_next = out_dict["X_next"]
 
-        # HARD BOUNDARY ENFORCEMENT: Clip component positions to ensure ENTIRE component stays in bounds
-        # For continuous mode, ensure components don't go out of canvas
+        # NO CLIPPING DURING TRAINING OR ENERGY CALCULATION!
         #
-        # CRITICAL FIX: Only clip during EVALUATION, NOT during training!
-        # During training, we need to calculate energy on UNCLIPPED positions so the model
-        # learns that out-of-bounds predictions are bad (via boundary_weight penalty).
-        # If we clip before energy calculation, the model is REWARDED for predicting
-        # out-of-bounds positions because clipping makes them look valid!
-        is_training = scan_dict.get("is_training", 1)  # Default to training (1) if not specified
-        # Only clip if NOT training (is_training == 0 means eval mode)
-        if hasattr(self, 'continuous_dim') and self.continuous_dim > 0 and is_training == 0:
-            # Only clip in eval mode (is_training == 0)
-            # In training, boundary penalty will teach model to stay in bounds
-            X_next = self._clip_positions_to_bounds(X_next, energy_graph_batch)
+        # CRITICAL FIXES APPLIED:
+        # 1. GaussianNoise.sample_forward_diff_process() now uses Gaussian (not bounded uniform)
+        #    and does NOT clip during forward diffusion
+        # 2. Energy calculation receives UNCLIPPED positions
+        # 3. boundary_weight * boundary_penalty provides gradient to teach model
+        #
+        # The model learns to avoid boundaries through:
+        # - Energy gradient: ∂E/∂x = ∂HPWL/∂x + 5000*∂overlap/∂x + 5000*∂boundary/∂x
+        # - When x > 1: ∂boundary/∂x > 0 → gradient pushes x back inside
+        #
+        # Clipping only happens AFTER inference in eval_and_visualize.py for visualization
+        #
+        # OLD CONTRADICTORY CLIPPING LOGIC REMOVED
 
         state_log_probs = out_dict["state_log_probs"]
         graph_log_prob = out_dict["graph_log_prob"]

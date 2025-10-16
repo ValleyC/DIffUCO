@@ -138,17 +138,17 @@ class GaussianNoiseDistr(BaseNoiseDistr):
     @partial(jax.jit, static_argnums=(0,))
     def sample_forward_diff_process(self, X_t_m1, t_idx, key):
         """
-        Sample from BOUNDED UNIFORM forward diffusion process: X_t ~ p(X_t | X_{t-1}).
+        Sample from Gaussian forward diffusion process: X_t ~ N(sqrt(alpha_t) * X_{t-1}, beta_t * I).
 
-        This process is designed to converge to Uniform([-1, 1]^d) at t=T, matching
-        our uniform prior. This fixes the prior-forward mismatch issue.
+        CRITICAL: NO CLIPPING during forward process!
+        - Clipping during forward diffusion teaches model that edges are valid
+        - boundary_weight penalty must see out-of-bounds positions to provide gradient
+        - Model learns to avoid boundaries through energy-based training, not clipping
 
         Process:
-        1. Drift towards center: X_drift = X_{t-1} * sqrt(alpha_t)
-        2. Add bounded uniform noise: epsilon ~ Uniform[-sqrt(beta_t), sqrt(beta_t)]
-        3. Clip to [-1, 1]: X_t = clip(X_drift + epsilon)
-
-        At t=T, this approaches Uniform([-1, 1]^d) when alpha_bar_T ≈ 0.
+        1. Drift: X_drift = sqrt(alpha_t) * X_{t-1}
+        2. Add Gaussian noise: epsilon ~ N(0, beta_t * I)
+        3. Return: X_t = X_drift + epsilon (NO CLIPPING!)
 
         Args:
             X_t_m1: Previous state (shape: [num_components, continuous_dim])
@@ -156,45 +156,28 @@ class GaussianNoiseDistr(BaseNoiseDistr):
             key: JAX random key
 
         Returns:
-            X_t: Next state (shape: [num_components, continuous_dim])
+            X_t: Next state (shape: [num_components, continuous_dim]) - UNCLIPPED!
             log_probs: Log probability of this sample (shape: [num_components,])
             key: Updated JAX random key
         """
         beta_t = self.beta_arr[t_idx]
         alpha_t = self.alpha_arr[t_idx]
 
-        # Step 1: Drift towards center (0) by factor sqrt(alpha_t)
-        # This gradually forgets the initial position
+        # Step 1: Drift towards center by factor sqrt(alpha_t)
         X_drift = jnp.sqrt(alpha_t) * X_t_m1
 
-        # Step 2: Add bounded uniform noise
-        # Noise range: [-sqrt(beta_t), sqrt(beta_t)]
+        # Step 2: Add Gaussian noise
         key, subkey = jax.random.split(key)
-        noise_scale = jnp.sqrt(beta_t)
+        noise_std = jnp.sqrt(beta_t)
+        epsilon = jax.random.normal(subkey, shape=X_t_m1.shape) * noise_std
 
-        # Sample uniform noise in [-noise_scale, noise_scale]
-        uniform_01 = jax.random.uniform(subkey, shape=X_t_m1.shape)  # [0, 1]
-        epsilon = 2.0 * noise_scale * (uniform_01 - 0.5)  # [-noise_scale, noise_scale]
+        # Step 3: NO CLIPPING! Let positions go out of bounds
+        # The energy function with boundary_weight will penalize this
+        X_t = X_drift + epsilon
 
-        # Step 3: Apply noise and clip to bounds
-        X_t_unclipped = X_drift + epsilon
-        X_t = jnp.clip(X_t_unclipped, -1.0, 1.0)
-
-        # Step 4: Compute log probability
-        # For uniform noise in [-a, a]: p(epsilon) = 1/(2a) for |epsilon| <= a
-        # log p(epsilon) = -log(2a) = -log(2*noise_scale)
-
-        # Check if noise was within bounds (before clipping)
-        in_bounds = jnp.logical_and(
-            X_t_unclipped >= -1.0,
-            X_t_unclipped <= 1.0
-        )
-
-        # Log prob per dimension
-        log_prob_uniform = -jnp.log(2.0 * noise_scale)  # Uniform density
-        log_prob_per_dim = jnp.where(in_bounds, log_prob_uniform, -20.0)  # Penalize clipping
-
-        # Sum over continuous dimensions
+        # Step 4: Compute log probability of Gaussian
+        # log N(x; mu, sigma^2) = -0.5 * [(x-mu)^2/sigma^2 + log(2*pi*sigma^2)]
+        log_prob_per_dim = -0.5 * (epsilon**2 / beta_t + jnp.log(2 * jnp.pi * beta_t))
         log_probs = jnp.sum(log_prob_per_dim, axis=-1)
 
         return X_t, log_probs, key
