@@ -121,16 +121,39 @@ class ChipPlacementEnergyClass(BaseEnergyClass):
             self.boundary_weight * boundary_per_graph
         )
 
-        # DEBUG: Print energy components to diagnose stacking issue
-        # if jnp.mean(hpwl_per_graph) < 20:  # Only print when HPWL is suspiciously low
-        #     print(f"\n=== DEBUG ENERGY COMPONENTS ===")
-        #     print(f"HPWL per graph: {hpwl_per_graph}")
-        #     print(f"Overlap per graph: {overlap_per_graph}")
-        #     print(f"Boundary per graph: {boundary_per_graph}")
-        #     print(f"Component sizes (first 5): {component_sizes[:5]}")
-        #     print(f"Positions (first 5): {positions[:5]}")
-        #     print(f"Total Energy: {Energy_per_graph}")
-        #     print(f"================================\n")
+        # DIAGNOSTIC LOGGING: Monitor energy balance to detect stacking
+        # Uncomment during debugging to see if energy components are balanced
+        # Expected healthy ratios:
+        #   - HPWL: 10-100
+        #   - Overlap penalty (weighted): 10-100 (similar to HPWL)
+        #   - Boundary penalty (weighted): 10-100 (similar to HPWL)
+        # If overlap or boundary >> HPWL, components are likely stacking!
+
+        if False:  # Set to True to enable diagnostic logging
+            mean_hpwl = jnp.mean(hpwl_per_graph)
+            mean_overlap_weighted = jnp.mean(self.overlap_weight * overlap_per_graph)
+            mean_boundary_weighted = jnp.mean(self.boundary_weight * boundary_per_graph)
+            mean_total = jnp.mean(Energy_per_graph)
+
+            # Position statistics
+            pos_min = jnp.min(positions)
+            pos_max = jnp.max(positions)
+            pos_mean = jnp.mean(positions)
+            pos_std = jnp.std(positions)
+
+            # Check for out-of-bounds components
+            num_oob = jnp.sum((jnp.abs(positions[:, 0]) > 1.0) | (jnp.abs(positions[:, 1]) > 1.0))
+
+            print(f"\n=== ENERGY DIAGNOSTICS ===")
+            print(f"HPWL (mean):              {mean_hpwl:.2f}")
+            print(f"Overlap*weight (mean):    {mean_overlap_weighted:.2f}")
+            print(f"Boundary*weight (mean):   {mean_boundary_weighted:.2f}")
+            print(f"Total Energy (mean):      {mean_total:.2f}")
+            print(f"---")
+            print(f"Position range: [{pos_min:.3f}, {pos_max:.3f}]")
+            print(f"Position mean±std: {pos_mean:.3f} ± {pos_std:.3f}")
+            print(f"Components out-of-bounds: {num_oob}/{positions.shape[0]}")
+            print(f"==========================\n")
 
         # Constraint violations (for monitoring)
         constraint_violations_per_graph = overlap_per_graph + boundary_per_graph

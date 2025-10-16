@@ -76,10 +76,22 @@ CHIP_PLACEMENT_CONFIG = {
 
     # ===== Energy Function Settings =====
     # ChipPlacementEnergy parameters
-    "overlap_weight": 5000.0,              # Penalty weight for component overlaps (must be >> HPWL to prevent clustering)
-    "boundary_weight": 5000.0,             # CRITICAL: Penalty for out-of-bounds positions (MUST be high to prevent edge-stacking!)
-                                           # During training, positions are NOT clipped, so boundary penalty teaches model to stay in bounds
-                                           # During eval, positions ARE clipped for valid output
+    # CRITICAL FIX: Reduced weights to prevent corner/edge stacking!
+    # Previous weights (5000) were TOO HIGH, causing:
+    #   1. Boundary penalty >> HPWL → model minimizes boundary by clustering at corners
+    #   2. All components stack at edges/corners with massive overlaps
+    #   3. HPWL becomes insignificant compared to penalties
+    #
+    # New balanced weights:
+    #   - HPWL: ~10-100 (natural scale)
+    #   - Overlap: ~100-500 (should be 5-10x HPWL to encourage spreading)
+    #   - Boundary: ~100-500 (similar to overlap, both are hard constraints)
+    #
+    # With soft clipping in GaussianNoise ([-1.5, 1.5]), boundary violations are now reasonable
+    "overlap_weight": 100.0,               # Penalty weight for component overlaps (balanced with HPWL)
+    "boundary_weight": 200.0,              # Penalty for out-of-bounds positions (balanced, not overwhelming)
+                                           # With soft-clipped diffusion, violations are now in [-1.5, 1.5]
+                                           # so boundary_weight can be moderate
     "canvas_width": 2.0,                   # Canvas width (x: [-1, 1])
     "canvas_height": 2.0,                  # Canvas height (y: [-1, 1])
     "canvas_x_min": -1.0,                  # Canvas x minimum

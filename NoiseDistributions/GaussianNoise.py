@@ -140,15 +140,17 @@ class GaussianNoiseDistr(BaseNoiseDistr):
         """
         Sample from Gaussian forward diffusion process: X_t ~ N(sqrt(alpha_t) * X_{t-1}, beta_t * I).
 
-        CRITICAL: NO CLIPPING during forward process!
-        - Clipping during forward diffusion teaches model that edges are valid
-        - boundary_weight penalty must see out-of-bounds positions to provide gradient
-        - Model learns to avoid boundaries through energy-based training, not clipping
+        CRITICAL FIX: SOFT CLIPPING during forward process!
+        - Pure Gaussian diffusion can push components FAR outside [-1, 1] (e.g., to ±5)
+        - This creates MASSIVE boundary penalties that dominate training
+        - Components get pushed to corners/edges where boundary violation is "minimized"
+        - But this causes HUGE overlaps as all components cluster together!
 
-        Process:
-        1. Drift: X_drift = sqrt(alpha_t) * X_{t-1}
-        2. Add Gaussian noise: epsilon ~ N(0, beta_t * I)
-        3. Return: X_t = X_drift + epsilon (NO CLIPPING!)
+        Solution: Soft boundary-aware diffusion
+        - Clip sampled positions to slightly beyond bounds [-1.5, 1.5]
+        - This allows some exploration beyond bounds (for gradient signal)
+        - But prevents pathological far-out-of-bounds samples
+        - Model still learns boundary constraint, but from reasonable violations
 
         Args:
             X_t_m1: Previous state (shape: [num_components, continuous_dim])
@@ -156,7 +158,7 @@ class GaussianNoiseDistr(BaseNoiseDistr):
             key: JAX random key
 
         Returns:
-            X_t: Next state (shape: [num_components, continuous_dim]) - UNCLIPPED!
+            X_t: Next state (shape: [num_components, continuous_dim]) - SOFT CLIPPED!
             log_probs: Log probability of this sample (shape: [num_components,])
             key: Updated JAX random key
         """
@@ -171,11 +173,13 @@ class GaussianNoiseDistr(BaseNoiseDistr):
         noise_std = jnp.sqrt(beta_t)
         epsilon = jax.random.normal(subkey, shape=X_t_m1.shape) * noise_std
 
-        # Step 3: NO CLIPPING! Let positions go out of bounds
-        # The energy function with boundary_weight will penalize this
-        X_t = X_drift + epsilon
+        # Step 3: SOFT CLIPPING to prevent extreme out-of-bounds
+        # Allow positions in [-1.5, 1.5] (50% beyond canvas bounds)
+        # This is the KEY FIX to prevent corner/edge stacking!
+        X_t_unbounded = X_drift + epsilon
+        X_t = jnp.clip(X_t_unbounded, -1.5, 1.5)
 
-        # Step 4: Compute log probability of Gaussian
+        # Step 4: Compute log probability of Gaussian (on unbounded sample)
         # log N(x; mu, sigma^2) = -0.5 * [(x-mu)^2/sigma^2 + log(2*pi*sigma^2)]
         log_prob_per_dim = -0.5 * (epsilon**2 / beta_t + jnp.log(2 * jnp.pi * beta_t))
         log_probs = jnp.sum(log_prob_per_dim, axis=-1)
