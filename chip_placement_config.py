@@ -85,6 +85,10 @@ CHIP_PLACEMENT_CONFIG = {
     "canvas_x_min": -1.0,                  # Canvas x minimum
     "canvas_y_min": -1.0,                  # Canvas y minimum
 
+    # ChipDiffusion-style improvements
+    "use_soft_overlap": True,              # Use ChipDiffusion soft overlap penalty (smoother gradients + mass weighting)
+    "softmax_factor": 10.0,                # Temperature for softmax approximation of min (higher = sharper)
+
     # ===== Data Settings =====
     "seed": 123,                           # Random seed
     "relaxed": True,                       # Use relaxed (continuous) states
