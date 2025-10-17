@@ -331,8 +331,11 @@ class ChipPlacementEnergyClass(BaseEnergyClass):
         weights = jax.nn.softmax(delta * softmax_factor, axis=-1)  # (N, N, 2)
         l = jnp.sum(weights * delta, axis=-1, keepdims=True)  # (N, N, 1)
 
-        # Quadratic penalty on overlaps (ReLU ensures only negative l contributes)
-        h = jax.nn.relu(-l)**2 / 4.0  # (N, N, 1)
+        # CRITICAL FIX: Remove divide-by-4 that was making overlaps too weak!
+        # Original ChipDiffusion: h = relu(-l)^2 / 4
+        # Our fix: h = relu(-l)^2 (4x stronger!)
+        # For overlap depth d, penalty is now d^2 instead of d^2/4
+        h = jax.nn.relu(-l)**2  # (N, N, 1)
 
         # Mass weighting: favor moving smaller components
         # mass = geometric mean of component dimensions

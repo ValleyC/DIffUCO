@@ -222,7 +222,16 @@ def compute_full_energy(positions, graph, component_sizes, energy_fn):
 
     # Compute individual components
     hpwl = energy_fn._compute_hpwl(graph, positions, node_gr_idx, n_graph)
-    overlap = energy_fn._compute_overlap_penalty(positions, component_sizes, node_gr_idx, n_graph)
+
+    # CRITICAL FIX: Use the SAME overlap function as training!
+    # Training uses soft overlap (if use_soft_overlap=True), so evaluation must match
+    if energy_fn.use_soft_overlap:
+        overlap = energy_fn._compute_overlap_penalty_soft(
+            positions, component_sizes, node_gr_idx, n_graph, energy_fn.softmax_factor
+        )
+    else:
+        overlap = energy_fn._compute_overlap_penalty(positions, component_sizes, node_gr_idx, n_graph)
+
     boundary = energy_fn._compute_boundary_penalty(positions, component_sizes, node_gr_idx, n_graph)
 
     return {
