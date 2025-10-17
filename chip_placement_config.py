@@ -76,22 +76,21 @@ CHIP_PLACEMENT_CONFIG = {
 
     # ===== Energy Function Settings =====
     # ChipPlacementEnergy parameters
-    # CRITICAL FIX: Reduced weights to prevent corner/edge stacking!
-    # Previous weights (5000) were TOO HIGH, causing:
-    #   1. Boundary penalty >> HPWL → model minimizes boundary by clustering at corners
-    #   2. All components stack at edges/corners with massive overlaps
-    #   3. HPWL becomes insignificant compared to penalties
+    # Weight tuning rationale:
+    #   1. HPWL: ~10-100 (natural scale for normalized coordinates)
+    #   2. Soft overlap penalty uses relu(-l)^2 / 4 with mass weighting
+    #      - The /4 divisor and mass weighting significantly reduce penalty magnitude
+    #      - Need HIGH weight (1000-2000) to match HPWL scale
+    #   3. Boundary: moderate weight since components rarely go far out of bounds
+    #      with soft-clipped diffusion [-1.5, 1.5] and tanh(x/2)*2 clamping in ContinuousHead
     #
-    # New balanced weights:
-    #   - HPWL: ~10-100 (natural scale)
-    #   - Overlap: ~100-500 (should be 5-10x HPWL to encourage spreading)
-    #   - Boundary: ~100-500 (similar to overlap, both are hard constraints)
-    #
-    # With soft clipping in GaussianNoise ([-1.5, 1.5]), boundary violations are now reasonable
-    "overlap_weight": 100.0,               # Penalty weight for component overlaps (balanced with HPWL)
-    "boundary_weight": 200.0,              # Penalty for out-of-bounds positions (balanced, not overwhelming)
-                                           # With soft-clipped diffusion, violations are now in [-1.5, 1.5]
-                                           # so boundary_weight can be moderate
+    # Historical notes:
+    #   - weight=5000 without clamping caused corner stacking (boundary >> HPWL)
+    #   - weight=100-500 with /4 divisor was too weak (overlap penalty << HPWL)
+    #   - Unbounded predictions caused training collapse (energy → ∞)
+    #   - Current: overlap_weight=1000 with soft clamping to [-2, 2] prevents collapse
+    "overlap_weight": 1000.0,              # High weight needed due to /4 divisor and mass weighting in soft overlap
+    "boundary_weight": 200.0,              # Moderate weight for boundary violations
     "canvas_width": 2.0,                   # Canvas width (x: [-1, 1])
     "canvas_height": 2.0,                  # Canvas height (y: [-1, 1])
     "canvas_x_min": -1.0,                  # Canvas x minimum

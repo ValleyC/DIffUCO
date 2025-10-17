@@ -89,14 +89,21 @@ class ContinuousHead(nn.Module):
         # embeddings shape: [num_components, 1, embedding_dim]
         # We keep the middle dimension (1) for compatibility with existing code structure
 
-        # Predict mean: NO activation (unbounded)
-        # FIX: Removed tanh! It was causing edge-stacking bias:
-        # - tanh saturates at ±1 → components stick to edges/corners
-        # - tanh gradient near ±1 is ~0 → model gets stuck
-        # Instead, rely on hard boundary clipping in PPO_Trainer (after sampling)
-        # This allows model to predict ANY position, clipped only during execution
+        # Predict mean: SOFT clamping to prevent training collapse
+        #
+        # CRITICAL FIX: Unbounded predictions cause training collapse!
+        # Without clamping, model can predict extreme positions (±100) which create:
+        # - Massive overlap penalties: h = relu(-l)²/4 where l=-50 → h=625
+        # - With overlap_weight=500, energy explodes to 300,000+
+        # - mean_prob → 0, energy → ∞, training collapses
+        #
+        # Solution: Soft clamp using tanh with scale factor
+        # - tanh(x/scale) * limit maps unbounded → [-limit, limit]
+        # - scale=2.0: allows exploration beyond [-2, 2] during training
+        # - limit=2.0: prevents extreme out-of-bounds predictions
+        # - Gradients remain non-zero everywhere (unlike hard clip)
         position_mean_unbounded = self.mean_layer(embeddings)  # [num_components, 1, continuous_dim]
-        position_mean = position_mean_unbounded  # NO TANH!
+        position_mean = jnp.tanh(position_mean_unbounded / 2.0) * 2.0  # Soft clamp to [-2, 2]
 
         # Predict log variance: clip to prevent numerical instability
         # log_var in [-10, 2] corresponds to std in [exp(-5)=0.0067, exp(1)=2.718]
@@ -197,10 +204,10 @@ class ContinuousHeadChip(nn.Module):
             size_features = jnp.expand_dims(size_features, axis=1)  # [num_components, 1, 32]
             embeddings = jnp.concatenate([embeddings, size_features], axis=-1)
 
-        # Predict positions: NO activation (unbounded)
-        # FIX: Removed tanh to prevent edge-stacking bias (same fix as ContinuousHead)
+        # Predict positions: SOFT clamping (same as ContinuousHead)
+        # See ContinuousHead for detailed explanation of why clamping is critical
         position_mean_unbounded = self.mean_layer(embeddings)
-        position_mean = position_mean_unbounded  # NO TANH!
+        position_mean = jnp.tanh(position_mean_unbounded / 2.0) * 2.0  # Soft clamp to [-2, 2]
         position_log_var = self.log_var_layer(embeddings)
         position_log_var = jnp.clip(position_log_var, -10.0, 2.0)
 
