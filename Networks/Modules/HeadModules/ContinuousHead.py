@@ -99,11 +99,12 @@ class ContinuousHead(nn.Module):
         #
         # Solution: Soft clamp using tanh with scale factor
         # - tanh(x/scale) * limit maps unbounded → [-limit, limit]
-        # - scale=2.0: allows exploration beyond [-2, 2] during training
-        # - limit=2.0: prevents extreme out-of-bounds predictions
+        # - scale=1.5: allows moderate exploration beyond canvas
+        # - limit=1.5: keeps predictions close to canvas bounds [-1, 1]
+        # - Matches forward diffusion clipping in GaussianNoise
         # - Gradients remain non-zero everywhere (unlike hard clip)
         position_mean_unbounded = self.mean_layer(embeddings)  # [num_components, 1, continuous_dim]
-        position_mean = jnp.tanh(position_mean_unbounded / 2.0) * 2.0  # Soft clamp to [-2, 2]
+        position_mean = jnp.tanh(position_mean_unbounded / 1.5) * 1.5  # Soft clamp to [-1.5, 1.5]
 
         # Predict log variance: clip to prevent numerical instability
         # log_var in [-10, 2] corresponds to std in [exp(-5)=0.0067, exp(1)=2.718]
@@ -207,7 +208,7 @@ class ContinuousHeadChip(nn.Module):
         # Predict positions: SOFT clamping (same as ContinuousHead)
         # See ContinuousHead for detailed explanation of why clamping is critical
         position_mean_unbounded = self.mean_layer(embeddings)
-        position_mean = jnp.tanh(position_mean_unbounded / 2.0) * 2.0  # Soft clamp to [-2, 2]
+        position_mean = jnp.tanh(position_mean_unbounded / 1.5) * 1.5  # Soft clamp to [-1.5, 1.5]
         position_log_var = self.log_var_layer(embeddings)
         position_log_var = jnp.clip(position_log_var, -10.0, 2.0)
 

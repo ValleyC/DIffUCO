@@ -80,16 +80,16 @@ CHIP_PLACEMENT_CONFIG = {
     #   1. HPWL: ~10-100 (natural scale for normalized coordinates)
     #   2. Soft overlap penalty uses relu(-l)^2 / 4 with mass weighting
     #      - The /4 divisor and mass weighting significantly reduce penalty magnitude
-    #      - Need HIGH weight (1000-2000) to match HPWL scale
+    #      - Need moderate-high weight (500-800) to match HPWL scale
     #   3. Boundary: moderate weight since components rarely go far out of bounds
-    #      with soft-clipped diffusion [-1.5, 1.5] and tanh(x/2)*2 clamping in ContinuousHead
+    #      with soft-clipped diffusion [-1.5, 1.5] and tanh(x/1.5)*1.5 clamping
     #
     # Historical notes:
     #   - weight=5000 without clamping caused corner stacking (boundary >> HPWL)
-    #   - weight=100-500 with /4 divisor was too weak (overlap penalty << HPWL)
-    #   - Unbounded predictions caused training collapse (energy → ∞)
-    #   - Current: overlap_weight=1000 with soft clamping to [-2, 2] prevents collapse
-    "overlap_weight": 1000.0,              # High weight needed due to /4 divisor and mass weighting in soft overlap
+    #   - weight=100-500 with /4 divisor and loose clamping was too weak
+    #   - weight=1000 with [-2,2] clamping caused instability after 1k steps
+    #   - Current: overlap_weight=600 with tighter [-1.5,1.5] clamping for stability
+    "overlap_weight": 600.0,               # Moderate-high weight with tight clamping to [-1.5, 1.5]
     "boundary_weight": 200.0,              # Moderate weight for boundary violations
     "canvas_width": 2.0,                   # Canvas width (x: [-1, 1])
     "canvas_height": 2.0,                  # Canvas height (y: [-1, 1])
