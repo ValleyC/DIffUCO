@@ -52,7 +52,7 @@ class ChipDatasetGenerator(BaseDatasetGenerator):
 
         print(f'\nGenerating Chip Placement {self.mode} dataset "{self.dataset_name}" '
               f'with {self.graph_config[f"n_{self.mode}"]} instances!')
-        print(f'DATA GENERATION MODE: Unsupervised (netlist first, then random placement)\n')
+        print(f'DATA GENERATION MODE: ChipDiffusion (proximity-based netlist, then randomize)\n')
 
     def generate_dataset(self):
         """Generate chip placement dataset instances"""
