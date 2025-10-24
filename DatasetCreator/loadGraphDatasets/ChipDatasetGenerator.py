@@ -110,14 +110,14 @@ class ChipDatasetGenerator(BaseDatasetGenerator):
             hpwl: float, Half-Perimeter Wirelength
         """
 
-        # 1. Sample target density (ChipDiffusion parameters)
-        stop_density = self._sample_uniform(0.75, 0.9)  # Original: 75-90% density
+        # 1. Sample target density
+        stop_density = self._sample_uniform(0.75, 0.9)
 
-        # 2. Generate component sizes for ALL max_instance components (ChipDiffusion approach)
-        max_instance = 400  # Maximum number of components
-        aspect_ratios = self._sample_uniform(0.25, 1.0, (max_instance,))
-        long_sizes = self._sample_clipped_exp(scale=0.08, low=0.02, high=1.0,
-                                               size=(max_instance,))
+        # 2. SMALL TEST: Generate fewer, larger components (~8-12 components)
+        max_instance = 25  # Small pool to get ~8-12 placed components
+        aspect_ratios = self._sample_uniform(0.4, 1.0, (max_instance,))  # More square-ish
+        # Use UNIFORM distribution for consistently large components (not exponential)
+        long_sizes = self._sample_uniform(0.4, 0.75, (max_instance,))
         short_sizes = aspect_ratios * long_sizes
 
         # Random orientation
