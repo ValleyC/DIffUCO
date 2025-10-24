@@ -50,7 +50,8 @@ class Base(ABC):
         self.vmapped_sample_forward_diff_process = jax.vmap(self.NoiseDistrClass.sample_forward_diff_process, in_axes=(1, None, 0), out_axes=(1,1, 0))
 
         self.relaxed_energy = EnergyClass.calculate_Energy
-        self.vmapped_relaxed_energy = jax.vmap(self.relaxed_energy, in_axes=(None, 1, None), out_axes=(1, 1, 1))
+        # FIX: Add component_sizes as 4th argument (not vmapped, same for all basis states)
+        self.vmapped_relaxed_energy = jax.vmap(self.relaxed_energy, in_axes=(None, 1, None, None), out_axes=(1, 1, 1))
 
         self.energy_CE = EnergyClass.calculate_Energy_CE
         self.vmapped_energy_CE = jax.vmap(self.energy_CE, in_axes=(None, 1, None), out_axes=(1))
@@ -62,7 +63,8 @@ class Base(ABC):
         self.vmapped_energy_feasible = jax.vmap(self.energy_feasible, in_axes=(None, 1), out_axes=(1, 0, 1))
 
         self.relaxed_Energy_for_Loss = EnergyClass.calculate_Energy_loss
-        self.vmapped_relaxed_energy_for_Loss = jax.vmap(self.relaxed_Energy_for_Loss, in_axes=(None, 1, None),
+        # FIX: Add component_sizes as 4th argument (not vmapped, same for all basis states)
+        self.vmapped_relaxed_energy_for_Loss = jax.vmap(self.relaxed_Energy_for_Loss, in_axes=(None, 1, None, None),
                                                         out_axes=(1))
 
         self.pmap_apply_CE_on_p = jax.pmap(self.apply_CE_on_p, in_axes=(0, 0))
@@ -389,7 +391,9 @@ class Base(ABC):
 
         X_0 = X_next
         X_0 = jnp.array(X_0, dtype=jnp.float64)
-        energies, _, _ = self.vmapped_relaxed_energy(energy_graph_batch, X_0, node_gr_idx)
+        # FIX: Extract component sizes from graph nodes
+        component_sizes = energy_graph_batch.nodes[:, :2]
+        energies, _, _ = self.vmapped_relaxed_energy(energy_graph_batch, X_0, node_gr_idx, component_sizes)
         log_p_0 = self.EnergyClass.get_log_p_0_from_energy(energies, T)
         log_p_0_T = log_p_0_T.at[i + 1].set(log_p_0)
 
@@ -441,7 +445,9 @@ class Base(ABC):
         X_0 = X_next
         Xs_over_different_steps = scan_dict["Xs_over_different_steps"]
 
-        energies, _, _ = self.vmapped_relaxed_energy(energy_graph_batch, X_0, node_gr_idx)
+        # FIX: Extract component sizes from graph nodes
+        component_sizes = energy_graph_batch.nodes[:, :2]
+        energies, _, _ = self.vmapped_relaxed_energy(energy_graph_batch, X_0, node_gr_idx, component_sizes)
         log_p_0 = self.EnergyClass.get_log_p_0_from_energy(energies, T)
         log_p_0_T = log_p_0_T.at[-1].set(log_p_0)
 
@@ -594,7 +600,9 @@ class Base(ABC):
 
         X_0 = X_next
         X_0 = jnp.array(X_0, dtype=jnp.float64)
-        energies, _, _ = self.vmapped_relaxed_energy(energy_graph_batch, X_0, node_gr_idx)
+        # FIX: Extract component sizes from graph nodes
+        component_sizes = energy_graph_batch.nodes[:, :2]
+        energies, _, _ = self.vmapped_relaxed_energy(energy_graph_batch, X_0, node_gr_idx, component_sizes)
         log_p_0 = self.EnergyClass.get_log_p_0_from_energy(energies, T)
         log_p_0_T = log_p_0_T.at[i + 1].set(log_p_0)
 

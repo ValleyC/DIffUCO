@@ -1,12 +1,16 @@
 """
 Chip Placement Dataset Generator for UNSUPERVISED Learning (SDDS)
-Modified to follow TSP pattern: Netlist FIRST, then random legal placement
+Uses ORIGINAL ChipDiffusion proximity-based netlist generation
 
-Key differences from supervised ChipDiffusion:
-1. Generate netlist BEFORE placement (not based on proximity)
-2. Use random graph topology (Barabasi-Albert, etc.)
-3. Placement is legal but NOT HPWL-optimized
-4. Training data has high HPWL (model learns to improve)
+Method:
+1. Place components in initial legal pattern
+2. Generate netlist based on PROXIMITY (nearby components connect)
+3. Randomize placement (shuffle positions)
+
+Key properties:
+- Netlist has meaningful spatial structure (proximity-based)
+- Initial placement is randomized (high HPWL)
+- Model learns to reduce HPWL by respecting netlist structure
 """
 import torch
 import torch.distributions as dist
@@ -90,7 +94,10 @@ class ChipDatasetGenerator(BaseDatasetGenerator):
         """
         Sample one chip placement instance for UNSUPERVISED learning
 
-        Key: Generate netlist FIRST, placement SECOND (independent!)
+        ChipDiffusion Method:
+        1. Place components in initial pattern
+        2. Generate netlist based on PROXIMITY (nearby components connect)
+        3. Randomize placement (shuffle positions)
 
         Returns:
             positions: (V, 2) tensor of component center positions
@@ -99,35 +106,38 @@ class ChipDatasetGenerator(BaseDatasetGenerator):
             hpwl: float, Half-Perimeter Wirelength
         """
 
-        # 1. Sample number of components and target density
-        num_components = int(self._sample_uniform(20, 50))  # Fewer components for SDDS
-        stop_density = self._sample_uniform(0.6, 0.85)
+        # 1. Sample target density (ChipDiffusion parameters)
+        stop_density = self._sample_uniform(0.75, 0.9)  # Original: 75-90% density
 
-        # 2. Generate component sizes
-        aspect_ratios = self._sample_uniform(0.25, 1.0, (num_components,))
-        long_sizes = self._sample_clipped_exp(scale=0.08, low=0.02, high=0.5,
-                                               size=(num_components,))
+        # 2. Generate component sizes for ALL max_instance components (ChipDiffusion approach)
+        max_instance = 400  # Maximum number of components
+        aspect_ratios = self._sample_uniform(0.25, 1.0, (max_instance,))
+        long_sizes = self._sample_clipped_exp(scale=0.08, low=0.02, high=1.0,
+                                               size=(max_instance,))
         short_sizes = aspect_ratios * long_sizes
 
         # Random orientation
-        long_x = (torch.rand(num_components) > 0.5).float()
+        long_x = (torch.rand(max_instance) > 0.5).float()
         x_sizes = long_x * long_sizes + (1 - long_x) * short_sizes
         y_sizes = (1 - long_x) * long_sizes + long_x * short_sizes
 
-        # 3. Generate NETLIST FIRST (independent of placement!)
-        edge_index, edge_attr, num_terminals = self._generate_netlist_random_graph(
-            num_components, x_sizes, y_sizes
-        )
-
-        # 4. Generate PLACEMENT SECOND (independent of netlist!)
-        positions, placed_sizes, actual_density = self._place_components_legal(
+        # 3. FIRST: Place components until density target is reached
+        initial_positions, placed_sizes, actual_density = self._place_components_legal(
             x_sizes, y_sizes, stop_density
         )
 
-        # 5. Compute HPWL (will be high - that's correct!)
-        hpwl = self._compute_hpwl(positions, placed_sizes, edge_index, edge_attr)
+        # 4. SECOND: Generate netlist based on PROXIMITY in initial placement
+        edge_index, edge_attr = self._generate_netlist_proximity_based(
+            initial_positions, placed_sizes
+        )
 
-        # 6. Create PyG Data object
+        # 5. THIRD: Randomize placement (shuffle positions but keep legality)
+        randomized_positions = self._randomize_placement(placed_sizes)
+
+        # 6. Compute HPWL (will be high because placement is randomized!)
+        hpwl = self._compute_hpwl(randomized_positions, placed_sizes, edge_index, edge_attr)
+
+        # 7. Create PyG Data object
         data = Data(
             x=placed_sizes,           # (V, 2) component sizes
             edge_index=edge_index,    # (2, E)
@@ -135,56 +145,57 @@ class ChipDatasetGenerator(BaseDatasetGenerator):
             is_ports=torch.zeros(len(placed_sizes), dtype=torch.bool)
         )
 
-        return positions, data, actual_density, hpwl
+        return randomized_positions, data, actual_density, hpwl
 
-    def _generate_netlist_random_graph(self, num_components, x_sizes, y_sizes):
+    def _generate_netlist_proximity_based(self, positions, sizes):
         """
-        Generate netlist using random graph topology (NOT spatial!)
-        This ensures netlist is independent of placement.
+        Generate netlist based on SPATIAL PROXIMITY (ChipDiffusion method)
+
+        Components that are close together in the initial placement get connected.
+        This creates meaningful spatial structure in the netlist.
 
         Args:
-            num_components: int
-            x_sizes: (V,) tensor
-            y_sizes: (V,) tensor
+            positions: (V, 2) tensor of component center positions
+            sizes: (V, 2) tensor of component sizes
 
         Returns:
             edge_index: (2, E) tensor
             edge_attr: (E, 4) tensor of terminal offsets
-            num_terminals: (V,) tensor
         """
+        num_components = positions.shape[0]
 
-        # Option 1: Barabasi-Albert (scale-free, realistic for circuits)
-        m = min(3, num_components - 1)  # Number of edges to attach from new node
-        if num_components > 1 and m > 0:
-            G = nx.barabasi_albert_graph(num_components, m, seed=None)
-        else:
-            G = nx.Graph()
-            G.add_nodes_from(range(num_components))
+        if num_components < 2:
+            # Fallback for single component
+            edge_index = torch.tensor([[0], [0]], dtype=torch.long)
+            edge_attr = torch.zeros((1, 4), dtype=torch.float32)
+            return edge_index, edge_attr
 
-        # Option 2: Watts-Strogatz (small-world)
-        # k = min(4, num_components - 1)
-        # G = nx.watts_strogatz_graph(num_components, k, p=0.3, seed=None)
+        # Compute pairwise distances between component centers
+        dist_matrix = torch.cdist(positions, positions, p=2)  # (V, V) Euclidean distances
 
-        # Option 3: Erdos-Renyi (random)
-        # p = 0.1  # Edge probability
-        # G = nx.erdos_renyi_graph(num_components, p, seed=None)
+        # K-nearest neighbors approach (connect to k nearest neighbors)
+        k = min(5, num_components - 1)  # Connect to 3-5 nearest neighbors
 
-        # Ensure graph is connected (important for HPWL)
-        if not nx.is_connected(G):
-            # Add edges to connect components
-            components = list(nx.connected_components(G))
-            for i in range(len(components) - 1):
-                node1 = list(components[i])[0]
-                node2 = list(components[i + 1])[0]
-                G.add_edge(node1, node2)
+        edge_list = []
+        for i in range(num_components):
+            # Get k nearest neighbors (excluding self)
+            distances = dist_matrix[i, :]
+            distances[i] = float('inf')  # Exclude self
+            _, nearest_indices = torch.topk(distances, k, largest=False)
+
+            for j in nearest_indices:
+                edge_list.append([i, j.item()])
 
         # Generate terminals for each component
+        x_sizes = sizes[:, 0]
+        y_sizes = sizes[:, 1]
         areas = x_sizes * y_sizes
+
         num_terminals = self._sample_conditional_binomial(
             areas,
             binom_p=0.5,
-            binom_min_n=2,  # Minimum 2 terminals
-            t=64,  # Reduced from 128
+            binom_min_n=2,
+            t=64,
             p=0.65
         )
         num_terminals = torch.clamp(num_terminals, min=2, max=128).int()
@@ -193,42 +204,89 @@ class ChipDatasetGenerator(BaseDatasetGenerator):
         # Terminal offsets relative to component center
         terminal_offsets = self._get_terminal_offsets(x_sizes, y_sizes, max_num_terminals)
 
-        # Convert graph edges to edge list with terminal assignments
-        edge_list = []
+        # Create edge attributes with terminal assignments
         edge_attrs = []
+        for (u, v) in edge_list:
+            # Select random terminals from each component
+            term_u = np.random.randint(0, num_terminals[u].item())
+            term_v = np.random.randint(0, num_terminals[v].item())
 
-        for (u, v) in G.edges():
-            # For each graph edge, create a connection between terminals
-            # Randomly select which terminals connect (simulates multi-pin nets)
-            num_connections = np.random.randint(1, 3)  # 1-2 terminal connections per edge
+            # Get terminal offsets
+            offset_u = terminal_offsets[u, term_u, :]  # (2,)
+            offset_v = terminal_offsets[v, term_v, :]  # (2,)
 
-            for _ in range(num_connections):
-                # Select random terminals from each component
-                term_u = np.random.randint(0, num_terminals[u].item())
-                term_v = np.random.randint(0, num_terminals[v].item())
-
-                # Get terminal offsets
-                offset_u = terminal_offsets[u, term_u, :]  # (2,)
-                offset_v = terminal_offsets[v, term_v, :]  # (2,)
-
-                # Add edge (undirected, so add both directions)
-                edge_list.append([u, v])
-                edge_attrs.append(torch.cat([offset_u, offset_v]))
-
-                edge_list.append([v, u])
-                edge_attrs.append(torch.cat([offset_v, offset_u]))
+            edge_attrs.append(torch.cat([offset_u, offset_v]))
 
         if len(edge_list) == 0:
             # Fallback: create at least one edge
             edge_list = [[0, min(1, num_components-1)]]
             offset_0 = terminal_offsets[0, 0, :]
             offset_1 = terminal_offsets[min(1, num_components-1), 0, :]
-            edge_attrs = [torch.cat([offset_0, offset_1])]
+            edge_attrs = [torch.cat([offset_0, offset_1]]]
 
         edge_index = torch.tensor(edge_list, dtype=torch.long).T  # (2, E)
         edge_attr = torch.stack(edge_attrs)  # (E, 4)
 
-        return edge_index, edge_attr, num_terminals
+        return edge_index, edge_attr
+
+    def _randomize_placement(self, sizes):
+        """
+        Randomize component placement (shuffle positions)
+
+        This destroys the spatial relationships in the original placement,
+        creating a high HPWL that the model must learn to reduce.
+
+        Args:
+            sizes: (V, 2) tensor of component sizes
+
+        Returns:
+            positions: (V, 2) tensor of randomized center positions
+        """
+        num_components = sizes.shape[0]
+        x_sizes = sizes[:, 0]
+        y_sizes = sizes[:, 1]
+
+        placement = ChipPlacement()
+
+        # Shuffle the order of placement
+        indices = torch.randperm(num_components)
+
+        for idx in indices:
+            x_size_val = float(x_sizes[idx])
+            y_size_val = float(y_sizes[idx])
+
+            # Calculate valid position range
+            low = torch.tensor([(x_size_val/2) - 1.0, (y_size_val/2) - 1.0])
+            high = torch.tensor([1.0 - (x_size_val/2), 1.0 - (y_size_val/2)])
+
+            # Check if component fits
+            if (low >= high).any():
+                continue
+
+            placed = False
+            for attempt in range(self.max_attempts_per_instance):
+                # Random position (completely independent of netlist)
+                candidate_pos = torch.rand(2) * (high - low) + low
+
+                if placement.check_legality(candidate_pos[0].item(),
+                                           candidate_pos[1].item(),
+                                           x_size_val, y_size_val):
+                    placement.commit_instance(candidate_pos[0].item(),
+                                            candidate_pos[1].item(),
+                                            x_size_val, y_size_val)
+                    placed = True
+                    break
+
+            if not placed:
+                # Fallback: place at a default position if couldn't find legal spot
+                # This shouldn't happen often, but prevents crashes
+                default_pos = torch.tensor([0.0, 0.0])
+                placement.commit_instance(default_pos[0].item(),
+                                        default_pos[1].item(),
+                                        x_size_val, y_size_val)
+
+        positions = placement.get_positions()
+        return positions
 
     def _place_components_legal(self, x_sizes, y_sizes, stop_density):
         """

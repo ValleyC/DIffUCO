@@ -124,7 +124,11 @@ class Generator:
         num_nodes = self.get_num_nodes_fuc(pyg_graph)
         num_edges = pyg_graph.edge_index.shape[1]
 
-        nodes = cpu_np.zeros((num_nodes, 1), dtype=cpu_np.float32)
+        # FIX: Preserve node features (component sizes) from PyG graph
+        if hasattr(pyg_graph, 'x') and pyg_graph.x is not None:
+            nodes = cpu_np.array(pyg_graph.x, dtype=cpu_np.float32)
+        else:
+            nodes = cpu_np.zeros((num_nodes, 1), dtype=cpu_np.float32)
 
         senders = cpu_np.array(pyg_graph.edge_index[0, :])
         receivers = cpu_np.array(pyg_graph.edge_index[1, :])

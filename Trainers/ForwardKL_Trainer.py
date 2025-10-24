@@ -299,7 +299,9 @@ class ForwardKL(Base):
             prob_over_diff_steps = prob_over_diff_steps.at[i + 1].set(average_probs)
 
         X_0 = X_next
-        energies, _, _ = self.vmapped_relaxed_energy(energy_graph_batch, X_0, node_gr_idx)
+        # FIX: Extract component sizes from graph nodes
+        component_sizes = energy_graph_batch.nodes[:, :2]
+        energies, _, _ = self.vmapped_relaxed_energy(energy_graph_batch, X_0, node_gr_idx, component_sizes)
         log_p_0 = self.EnergyClass.get_log_p_0_from_energy(energies, T)
         log_p_0_T = log_p_0_T.at[i+1].set(log_p_0)
 
@@ -442,7 +444,9 @@ class ForwardKL(Base):
         rand_node_features_diff_steps = scan_dict["rand_node_features_diff_steps"]
         prob_over_diff_steps = scan_dict["prob_over_diff_steps"]
 
-        energies, _, _ = self.vmapped_relaxed_energy(energy_graph_batch, X_0, node_gr_idx)
+        # FIX: Extract component sizes from graph nodes
+        component_sizes = energy_graph_batch.nodes[:, :2]
+        energies, _, _ = self.vmapped_relaxed_energy(energy_graph_batch, X_0, node_gr_idx, component_sizes)
         log_p_0 = self.EnergyClass.get_log_p_0_from_energy(energies, T)
         log_p_0_T = log_p_0_T.at[-1].set(log_p_0)
 

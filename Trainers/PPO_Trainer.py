@@ -506,7 +506,9 @@ class PPO(Base):
             best_X_0, relaxed_energies_per_graph, Hb_per_graph = self.vmapped_energy_CE(jraph_graph, X_0, node_gr_idx)
             Hb = jnp.mean(jnp.abs(Hb_per_graph[:-1]))
         else:
-            relaxed_energies_per_graph, _, Hb_per_graph = self.vmapped_relaxed_energy(jraph_graph, X_0, node_gr_idx)
+            # FIX: Extract component sizes from graph nodes and pass to energy function
+            component_sizes = jraph_graph.nodes[:, :2]  # First 2 features are x_size, y_size
+            relaxed_energies_per_graph, _, Hb_per_graph = self.vmapped_relaxed_energy(jraph_graph, X_0, node_gr_idx, component_sizes)
             best_X_0 = X_0
             Hb = jnp.mean(jnp.abs(Hb_per_graph)[:-1])
 
@@ -514,7 +516,9 @@ class PPO(Base):
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_energy_reward_relaxed(self, jraph_graph, spin_logits, node_gr_idx):
-        relaxed_energies_per_graph, _, _ = self.vmapped_relaxed_energy_for_Loss(jraph_graph, spin_logits, node_gr_idx)
+        # FIX: Extract component sizes from graph nodes and pass to energy function
+        component_sizes = jraph_graph.nodes[:, :2]
+        relaxed_energies_per_graph, _, _ = self.vmapped_relaxed_energy_for_Loss(jraph_graph, spin_logits, node_gr_idx, component_sizes)
         return relaxed_energies_per_graph[...,0]
 
 
