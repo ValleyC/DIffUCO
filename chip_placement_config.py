@@ -76,8 +76,8 @@ CHIP_PLACEMENT_CONFIG = {
 
     # ===== Energy Function Settings =====
     # ChipPlacementEnergy parameters
-    "overlap_weight": 10.0,                # Penalty weight for component overlaps
-    "boundary_weight": 10.0,               # Penalty weight for out-of-bounds
+    "overlap_weight": 2000.0,                # Penalty weight for component overlaps
+    "boundary_weight": 2000.0,               # Penalty weight for out-of-bounds
     "canvas_width": 2.0,                   # Canvas width (x: [-1, 1])
     "canvas_height": 2.0,                  # Canvas height (y: [-1, 1])
     "canvas_x_min": -1.0,                  # Canvas x minimum

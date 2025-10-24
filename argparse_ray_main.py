@@ -46,6 +46,8 @@ parser.add_argument('--value_weighting', default=0.65, type = float, help='value
 parser.add_argument('--mem_frac', default= ".90", type = str, help='memory fraction')
 parser.add_argument('--diff_schedule', default= "own", type = str, help='define diffusion schedule')
 parser.add_argument('--proj_method', default= "None", choices = ["CE", "feasible", "None"], type = str, help='define projection method')
+parser.add_argument('--overlap_weight', default=2000.0, type = float, help='overlap penalty weight for chip placement')
+parser.add_argument('--boundary_weight', default=2000.0, type = float, help='boundary penalty weight for chip placement')
 parser.add_argument('--linear_message_passing', action='store_true')
 parser.add_argument('--no-linear_message_passing', dest='linear_message_passing', action='store_false')
 parser.add_argument('--relaxed', action='store_true')
@@ -245,6 +247,8 @@ def detect_and_run_for_loops():
                                                 "TD_k": args.TD_k,
                                                 "clip_value": args.clip_value,
                                                 "value_weighting": args.value_weighting
+                                                "overlap_weight": args.overlap_weight,
+                                                "boundary_weight": args.boundary_weight,
                                             }
 
                                             # Add continuous_dim for ChipPlacement
