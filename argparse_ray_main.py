@@ -328,7 +328,9 @@ def run( flexible_config, overwrite = True):
         "TD_k": 3,
         "clip_value": 0.2,
         "value_weighting": 0.65,
-        "continuous_dim": 0  # Default 0 for discrete; set to 2 for ChipPlacement
+        "continuous_dim": 0,  # Default 0 for discrete; set to 2 for ChipPlacement
+        "overlap_weight": 2000.0,  # ChipPlacement: overlap penalty weight
+        "boundary_weight": 2000.0  # ChipPlacement: boundary penalty weight
     }
 
     if(overwrite):
