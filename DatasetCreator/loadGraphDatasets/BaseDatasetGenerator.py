@@ -193,11 +193,11 @@ class BaseDatasetGenerator(ABC):
 		:param solutions: dictionary containing the solutions
 		"""
 		if self.save:
-			new_path = self.path + f"/loadGraphDatasets/DatasetSolutions/no_norm/{self.dataset_name}"
+			new_path = self.path + f"/DatasetCreator/loadGraphDatasets/DatasetSolutions/no_norm/{self.dataset_name}"
 			if not os.path.exists(new_path):
 				os.makedirs(new_path)
 
-			save_path = self.path + f"/loadGraphDatasets/DatasetSolutions/no_norm/{self.dataset_name}/{self.mode}_{self.problem}_seed_{self.seed}_solutions.pickle"
+			save_path = self.path + f"/DatasetCreator/loadGraphDatasets/DatasetSolutions/no_norm/{self.dataset_name}/{self.mode}_{self.problem}_seed_{self.seed}_solutions.pickle"
 			pickle.dump(solutions, open(save_path, "wb"))
 
 
