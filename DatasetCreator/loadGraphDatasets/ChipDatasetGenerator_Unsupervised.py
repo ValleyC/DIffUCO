@@ -222,7 +222,7 @@ class ChipDatasetGenerator(BaseDatasetGenerator):
             edge_list = [[0, min(1, num_components-1)]]
             offset_0 = terminal_offsets[0, 0, :]
             offset_1 = terminal_offsets[min(1, num_components-1), 0, :]
-            edge_attrs = [torch.cat([offset_0, offset_1]]]
+            edge_attrs = [torch.cat([offset_0, offset_1])]
 
         edge_index = torch.tensor(edge_list, dtype=torch.long).T  # (2, E)
         edge_attr = torch.stack(edge_attrs)  # (E, 4)
