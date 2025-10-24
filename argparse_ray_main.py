@@ -246,7 +246,7 @@ def detect_and_run_for_loops():
                                                 "lr_schedule": args.lr_schedule,
                                                 "TD_k": args.TD_k,
                                                 "clip_value": args.clip_value,
-                                                "value_weighting": args.value_weighting
+                                                "value_weighting": args.value_weighting,
                                                 "overlap_weight": args.overlap_weight,
                                                 "boundary_weight": args.boundary_weight,
                                             }
