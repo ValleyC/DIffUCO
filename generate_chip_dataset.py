@@ -20,9 +20,11 @@ parser.add_argument('--dataset', default='Chip_small',
 parser.add_argument('--seed', default=123, type=int, help='Random seed')
 parser.add_argument('--modes', default=['train', 'val', 'test'], nargs='+',
                    help='Which splits to generate (default: train val test)')
+parser.add_argument('--workers', default=None, type=int,
+                   help='Number of parallel workers (default: cpu_count - 1)')
 args = parser.parse_args()
 
-def generate_dataset(dataset_name, seed, modes):
+def generate_dataset(dataset_name, seed, modes, n_workers=None):
     """Generate chip placement dataset for specified modes"""
 
     base_config = {
@@ -48,7 +50,7 @@ def generate_dataset(dataset_name, seed, modes):
         config['mode'] = mode
 
         generator = ChipDatasetGenerator(config)
-        generator.generate_dataset()
+        generator.generate_dataset(n_workers=n_workers)
 
         print(f"\n✓ {mode} dataset generation complete!\n")
 
@@ -58,4 +60,4 @@ def generate_dataset(dataset_name, seed, modes):
 
 
 if __name__ == "__main__":
-    generate_dataset(args.dataset, args.seed, args.modes)
+    generate_dataset(args.dataset, args.seed, args.modes, n_workers=args.workers)

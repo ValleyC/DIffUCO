@@ -20,6 +20,8 @@ import networkx as nx
 from .BaseDatasetGenerator import BaseDatasetGenerator
 from tqdm import tqdm
 from torch_geometric.data import Data
+from multiprocessing import Pool, cpu_count
+import os
 
 
 class ChipDatasetGenerator(BaseDatasetGenerator):
@@ -54,8 +56,12 @@ class ChipDatasetGenerator(BaseDatasetGenerator):
               f'with {self.graph_config[f"n_{self.mode}"]} instances!')
         print(f'DATA GENERATION MODE: ChipDiffusion (proximity-based netlist, then randomize)\n')
 
-    def generate_dataset(self):
-        """Generate chip placement dataset instances"""
+    def generate_dataset(self, n_workers=None):
+        """Generate chip placement dataset instances in parallel
+
+        Args:
+            n_workers: Number of parallel workers (default: cpu_count())
+        """
         solutions = {
             "positions": [],
             "H_graphs": [],
@@ -67,28 +73,103 @@ class ChipDatasetGenerator(BaseDatasetGenerator):
             "compl_H_graphs": [],
         }
 
-        for idx in tqdm(range(self.graph_config[f"n_{self.mode}"])):
-            # Generate one chip placement instance
-            positions, data, density, hpwl = self.sample_chip_instance_unsupervised()
+        n_instances = self.graph_config[f"n_{self.mode}"]
 
-            solutions["positions"].append(positions.numpy())
-            solutions["H_graphs"].append(data)
-            solutions["sizes"].append(data.x.numpy())
-            solutions["edge_attrs"].append(data.edge_attr.numpy())
-            solutions["graph_sizes"].append(positions.shape[0])
-            solutions["densities"].append(density)
-            solutions["Energies"].append(hpwl)
-            solutions["compl_H_graphs"].append(data)
+        # Determine number of workers
+        if n_workers is None:
+            n_workers = max(1, cpu_count() - 1)  # Leave 1 core free
 
-            # Save individual instance
-            indexed_solution_dict = {}
-            for key in solutions.keys():
-                if len(solutions[key]) > 0:
-                    indexed_solution_dict[key] = solutions[key][idx]
-            self.save_instance_solution(indexed_solution_dict, idx)
+        print(f"Using {n_workers} parallel workers for dataset generation")
+
+        if n_workers == 1:
+            # Sequential generation (original behavior)
+            for idx in tqdm(range(n_instances)):
+                result = self._generate_single_instance(idx)
+                self._append_result(solutions, result, idx)
+        else:
+            # Parallel generation
+            with Pool(processes=n_workers) as pool:
+                # Use imap_unordered for better performance with progress bar
+                results = list(tqdm(
+                    pool.imap_unordered(self._generate_single_instance, range(n_instances)),
+                    total=n_instances
+                ))
+
+            # Sort results by index to maintain order
+            results.sort(key=lambda x: x['idx'])
+
+            # Append results in order
+            for result in results:
+                self._append_result(solutions, result, result['idx'])
 
         # Save all solutions
         self.save_solutions(solutions)
+
+    def _generate_single_instance(self, idx):
+        """Generate a single chip placement instance (worker function)
+
+        Args:
+            idx: Instance index
+
+        Returns:
+            dict: Generated instance data with index
+        """
+        # Set unique random seed for this worker/instance
+        np.random.seed(self.seed + self.mode_seed_offset() + idx)
+        torch.manual_seed(self.seed + self.mode_seed_offset() + idx)
+
+        # Generate one chip placement instance
+        positions, data, density, hpwl = self.sample_chip_instance_unsupervised()
+
+        return {
+            'idx': idx,
+            'positions': positions.numpy(),
+            'data': data,
+            'sizes': data.x.numpy(),
+            'edge_attrs': data.edge_attr.numpy(),
+            'graph_size': positions.shape[0],
+            'density': density,
+            'hpwl': hpwl
+        }
+
+    def mode_seed_offset(self):
+        """Get seed offset based on mode (same as BaseDatasetGenerator)"""
+        if self.mode == "val":
+            return 5
+        elif self.mode == "test":
+            return 4
+        else:
+            return 0
+
+    def _append_result(self, solutions, result, idx):
+        """Append a single result to solutions dict and save it
+
+        Args:
+            solutions: Solutions dictionary to append to
+            result: Result dictionary from _generate_single_instance
+            idx: Instance index
+        """
+        solutions["positions"].append(result['positions'])
+        solutions["H_graphs"].append(result['data'])
+        solutions["sizes"].append(result['sizes'])
+        solutions["edge_attrs"].append(result['edge_attrs'])
+        solutions["graph_sizes"].append(result['graph_size'])
+        solutions["densities"].append(result['density'])
+        solutions["Energies"].append(result['hpwl'])
+        solutions["compl_H_graphs"].append(result['data'])
+
+        # Save individual instance
+        indexed_solution_dict = {
+            "positions": result['positions'],
+            "H_graphs": result['data'],
+            "sizes": result['sizes'],
+            "edge_attrs": result['edge_attrs'],
+            "graph_sizes": result['graph_size'],
+            "densities": result['density'],
+            "Energies": result['hpwl'],
+            "compl_H_graphs": result['data']
+        }
+        self.save_instance_solution(indexed_solution_dict, idx)
 
     def sample_chip_instance_unsupervised(self):
         """
