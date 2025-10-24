@@ -17,9 +17,9 @@ import torch.distributions as dist
 import shapely
 import numpy as np
 import networkx as nx
+import jraph
 from .BaseDatasetGenerator import BaseDatasetGenerator
 from tqdm import tqdm
-from torch_geometric.data import Data
 from multiprocessing import Pool, cpu_count
 import os
 
@@ -71,6 +71,7 @@ class ChipDatasetGenerator(BaseDatasetGenerator):
             "densities": [],
             "Energies": [],  # HPWL
             "compl_H_graphs": [],
+            "gs_bins": [],  # Ground truth (positions for chip placement)
         }
 
         n_instances = self.graph_config[f"n_{self.mode}"]
@@ -119,16 +120,13 @@ class ChipDatasetGenerator(BaseDatasetGenerator):
         torch.manual_seed(self.seed + self.mode_seed_offset() + idx)
 
         # Generate one chip placement instance
-        positions, data, density, hpwl = self.sample_chip_instance_unsupervised()
+        positions, H_graph, density, hpwl = self.sample_chip_instance_unsupervised()
 
-        # Convert all torch tensors to numpy for safe multiprocessing serialization
+        # jraph.GraphsTuple is already serializable (it's a NamedTuple with numpy arrays)
         return {
             'idx': idx,
-            'positions': positions.numpy(),
-            'x': data.x.numpy(),
-            'edge_index': data.edge_index.numpy(),
-            'edge_attr': data.edge_attr.numpy(),
-            'is_ports': data.is_ports.numpy(),
+            'positions': positions,
+            'H_graph': H_graph,
             'graph_size': positions.shape[0],
             'density': density,
             'hpwl': hpwl
@@ -151,33 +149,38 @@ class ChipDatasetGenerator(BaseDatasetGenerator):
             result: Result dictionary from _generate_single_instance
             idx: Instance index
         """
-        # Reconstruct PyTorch Data object from numpy arrays
-        data = Data(
-            x=torch.from_numpy(result['x']),
-            edge_index=torch.from_numpy(result['edge_index']),
-            edge_attr=torch.from_numpy(result['edge_attr']),
-            is_ports=torch.from_numpy(result['is_ports'])
-        )
+        H_graph = result['H_graph']
+
+        # Extract component sizes from H_graph nodes
+        sizes = H_graph.nodes  # (V, 2) numpy array of component sizes
+
+        # Extract edge attributes (terminal offsets) from H_graph edges
+        edge_attrs = H_graph.edges  # (E, 4) numpy array
+
+        # For chip placement, gs_bins is the positions (like TSP uses positions as gs_bins)
+        gs_bins = result['positions']
 
         solutions["positions"].append(result['positions'])
-        solutions["H_graphs"].append(data)
-        solutions["sizes"].append(result['x'])
-        solutions["edge_attrs"].append(result['edge_attr'])
+        solutions["H_graphs"].append(H_graph)
+        solutions["sizes"].append(sizes)
+        solutions["edge_attrs"].append(edge_attrs)
         solutions["graph_sizes"].append(result['graph_size'])
         solutions["densities"].append(result['density'])
         solutions["Energies"].append(result['hpwl'])
-        solutions["compl_H_graphs"].append(data)
+        solutions["compl_H_graphs"].append(H_graph)
+        solutions["gs_bins"].append(gs_bins)
 
         # Save individual instance
         indexed_solution_dict = {
             "positions": result['positions'],
-            "H_graphs": data,
-            "sizes": result['x'],
-            "edge_attrs": result['edge_attr'],
+            "H_graphs": H_graph,
+            "sizes": sizes,
+            "edge_attrs": edge_attrs,
             "graph_sizes": result['graph_size'],
             "densities": result['density'],
             "Energies": result['hpwl'],
-            "compl_H_graphs": data
+            "compl_H_graphs": H_graph,
+            "gs_bins": gs_bins
         }
         self.save_instance_solution(indexed_solution_dict, idx)
 
@@ -191,8 +194,8 @@ class ChipDatasetGenerator(BaseDatasetGenerator):
         3. Randomize placement (shuffle positions)
 
         Returns:
-            positions: (V, 2) tensor of component center positions
-            data: PyG Data object with graph structure
+            positions: (V, 2) numpy array of component center positions
+            H_graph: jraph.GraphsTuple with graph structure
             density: float, placement density
             hpwl: float, Half-Perimeter Wirelength
         """
@@ -228,15 +231,27 @@ class ChipDatasetGenerator(BaseDatasetGenerator):
         # 6. Compute HPWL (will be high because placement is randomized!)
         hpwl = self._compute_hpwl(randomized_positions, placed_sizes, edge_index, edge_attr)
 
-        # 7. Create PyG Data object
-        data = Data(
-            x=placed_sizes,           # (V, 2) component sizes
-            edge_index=edge_index,    # (2, E)
-            edge_attr=edge_attr,      # (E, 4) terminal offsets
-            is_ports=torch.zeros(len(placed_sizes), dtype=torch.bool)
+        # 7. Create jraph.GraphsTuple (like TSP dataset)
+        # Convert torch tensors to numpy
+        positions_np = randomized_positions.numpy() if isinstance(randomized_positions, torch.Tensor) else randomized_positions
+        sizes_np = placed_sizes.numpy() if isinstance(placed_sizes, torch.Tensor) else placed_sizes
+        edge_index_np = edge_index.numpy() if isinstance(edge_index, torch.Tensor) else edge_index
+        edge_attr_np = edge_attr.numpy() if isinstance(edge_attr, torch.Tensor) else edge_attr
+
+        num_nodes = sizes_np.shape[0]
+        num_edges = edge_index_np.shape[1]
+
+        H_graph = jraph.GraphsTuple(
+            nodes=sizes_np,                    # (V, 2) component sizes
+            edges=edge_attr_np,                # (E, 4) terminal offsets
+            senders=edge_index_np[0, :],       # (E,) source node indices
+            receivers=edge_index_np[1, :],     # (E,) target node indices
+            n_node=np.array([num_nodes]),      # number of nodes
+            n_edge=np.array([num_edges]),      # number of edges
+            globals=None
         )
 
-        return randomized_positions, data, actual_density, hpwl
+        return positions_np, H_graph, actual_density, hpwl
 
     def _generate_netlist_proximity_based(self, positions, sizes):
         """
