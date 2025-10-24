@@ -112,7 +112,7 @@ class ChipDatasetGenerator(BaseDatasetGenerator):
             idx: Instance index
 
         Returns:
-            dict: Generated instance data with index
+            dict: Generated instance data with index (all as numpy/basic types for serialization)
         """
         # Set unique random seed for this worker/instance
         np.random.seed(self.seed + self.mode_seed_offset() + idx)
@@ -121,12 +121,14 @@ class ChipDatasetGenerator(BaseDatasetGenerator):
         # Generate one chip placement instance
         positions, data, density, hpwl = self.sample_chip_instance_unsupervised()
 
+        # Convert all torch tensors to numpy for safe multiprocessing serialization
         return {
             'idx': idx,
             'positions': positions.numpy(),
-            'data': data,
-            'sizes': data.x.numpy(),
-            'edge_attrs': data.edge_attr.numpy(),
+            'x': data.x.numpy(),
+            'edge_index': data.edge_index.numpy(),
+            'edge_attr': data.edge_attr.numpy(),
+            'is_ports': data.is_ports.numpy(),
             'graph_size': positions.shape[0],
             'density': density,
             'hpwl': hpwl
@@ -149,25 +151,33 @@ class ChipDatasetGenerator(BaseDatasetGenerator):
             result: Result dictionary from _generate_single_instance
             idx: Instance index
         """
+        # Reconstruct PyTorch Data object from numpy arrays
+        data = Data(
+            x=torch.from_numpy(result['x']),
+            edge_index=torch.from_numpy(result['edge_index']),
+            edge_attr=torch.from_numpy(result['edge_attr']),
+            is_ports=torch.from_numpy(result['is_ports'])
+        )
+
         solutions["positions"].append(result['positions'])
-        solutions["H_graphs"].append(result['data'])
-        solutions["sizes"].append(result['sizes'])
-        solutions["edge_attrs"].append(result['edge_attrs'])
+        solutions["H_graphs"].append(data)
+        solutions["sizes"].append(result['x'])
+        solutions["edge_attrs"].append(result['edge_attr'])
         solutions["graph_sizes"].append(result['graph_size'])
         solutions["densities"].append(result['density'])
         solutions["Energies"].append(result['hpwl'])
-        solutions["compl_H_graphs"].append(result['data'])
+        solutions["compl_H_graphs"].append(data)
 
         # Save individual instance
         indexed_solution_dict = {
             "positions": result['positions'],
-            "H_graphs": result['data'],
-            "sizes": result['sizes'],
-            "edge_attrs": result['edge_attrs'],
+            "H_graphs": data,
+            "sizes": result['x'],
+            "edge_attrs": result['edge_attr'],
             "graph_sizes": result['graph_size'],
             "densities": result['density'],
             "Energies": result['hpwl'],
-            "compl_H_graphs": result['data']
+            "compl_H_graphs": data
         }
         self.save_instance_solution(indexed_solution_dict, idx)
 
