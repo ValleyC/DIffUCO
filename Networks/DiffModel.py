@@ -76,7 +76,8 @@ class DiffModel(nn.Module):
 																 n_layers=self.n_message_passes
 																 )
 
-		self.HeadModel = HeadModel(n_features_list_prob=self.n_features_list_prob, dtype = dtype)
+		# Pass continuous_dim to HeadModel for continuous problems (e.g., ChipPlacement)
+		self.HeadModel = HeadModel(n_features_list_prob=self.n_features_list_prob, dtype = dtype, continuous_dim=self.continuous_dim)
 
 		self.__vmap_get_log_probs = jax.vmap(self.__get_log_prob, in_axes=(0, None, None), out_axes=(0))
 		self.vamp_get_sinusoidal_positional_encoding = jax.vmap(get_sinusoidal_positional_encoding, in_axes=(0, None, None))
