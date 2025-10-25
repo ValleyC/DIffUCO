@@ -13,6 +13,8 @@ class NormalHeadModule(nn.Module):
     """
     n_features_list_prob: np.ndarray
     dtype: any
+    continuous_dim: int = 0  # Ignored for NormalHead (discrete mode only)
+
     def setup(self):
         self.probMLP = ProbMLP(n_features_list=self.n_features_list_prob, dtype = self.dtype)
 
@@ -35,6 +37,7 @@ class TransformerHead(nn.Module):
     """
     n_features_list_prob: np.ndarray
     dtype: any
+    continuous_dim: int = 0  # Ignored for TransformerHead (discrete mode only)
 
     def setup(self):
         self.probMLP = ProbMLP(n_features_list=self.n_features_list_prob, dtype= self.dtype)

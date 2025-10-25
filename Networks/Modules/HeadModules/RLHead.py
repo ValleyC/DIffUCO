@@ -78,11 +78,21 @@ class RLHeadModule_agg_after(nn.Module):
     """
     n_features_list_prob: np.ndarray
     dtype: any
+    continuous_dim: int = 0  # 0 for discrete, >0 for continuous
 
     def setup(self):
-        self.probMLP = ProbMLP(n_features_list=self.n_features_list_prob)
+        if self.continuous_dim > 0:
+            # Continuous mode: output mean and log_var for Gaussian
+            mean_features = list(self.n_features_list_prob) + [self.continuous_dim]
+            logvar_features = list(self.n_features_list_prob) + [self.continuous_dim]
+            self.meanMLP = ReluMLP(n_features_list=mean_features, dtype=self.dtype)
+            self.logvarMLP = ReluMLP(n_features_list=logvar_features, dtype=self.dtype)
+        else:
+            # Discrete mode: output logits for categorical
+            self.probMLP = ProbMLP(n_features_list=self.n_features_list_prob, dtype=self.dtype)
+
         value_feature_list = [120, 64, 1]
-        self.ValueMLP = ValueMLP(n_features_list=value_feature_list)
+        self.ValueMLP = ValueMLP(n_features_list=value_feature_list, dtype=self.dtype)
 
     @partial(flax.linen.jit, static_argnums=0)
     def __call__(self,jraph_graph_list, x, out_dict) -> jnp.ndarray:
@@ -90,12 +100,20 @@ class RLHeadModule_agg_after(nn.Module):
         forward pass though MLP
         @param x: input data as jax numpy array
         """
-        spin_logits = self.probMLP(x)
+        if self.continuous_dim > 0:
+            # Continuous mode
+            position_mean = self.meanMLP(x)
+            position_log_var = self.logvarMLP(x)
+            out_dict["position_mean"] = position_mean
+            out_dict["position_log_var"] = position_log_var
+        else:
+            # Discrete mode
+            spin_logits = self.probMLP(x)
+            out_dict["spin_logits"] = spin_logits
 
         node_graph_idx, n_graph, n_node = get_graph_info(jraph_graph_list)
         Values = self.ValueMLP(x)
         aggr_Values = global_graph_aggr(Values, node_graph_idx, n_graph)[..., 0, 0]
-        out_dict["spin_logits"] = spin_logits
         out_dict["Values"] = aggr_Values
         return out_dict
 
@@ -118,6 +136,7 @@ class RLHeadModuleTSP(nn.Module):
     """
     n_features_list_prob: np.ndarray
     dtype: any
+    continuous_dim: int = 0  # Ignored for TSP (discrete mode only)
 
     def setup(self):
         self.probMLP = ProbMLP(n_features_list=self.n_features_list_prob, dtype= self.dtype)
@@ -133,7 +152,7 @@ class RLHeadModuleTSP(nn.Module):
         x_aggr = jnp.mean(x, axis = -2, keepdims=True)
         rep_x_aggr = jnp.repeat(x_aggr, x.shape[-2], axis = -2)
         x = jnp.concatenate([x, rep_x_aggr], axis = -1)
-        
+
         spin_logits = self.probMLP(x)
         spin_logits = spin_logits[:,0,...]
 
