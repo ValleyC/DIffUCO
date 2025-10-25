@@ -462,7 +462,9 @@ class TrainMeanField:
 			input_graph_list, energy_graphs = self._prepare_graphs(jraph_graph_dict, mode = "val")
 
 			batched_graph = input_graph_list["graphs"][0]
-			X_prev = jnp.ones((batched_graph.nodes.shape[1], 1))
+			# Use continuous_dim for continuous problems (e.g., ChipPlacement), otherwise 1 for discrete
+			state_dim = self.config.get("continuous_dim", 0) if self.config.get("continuous_dim", 0) > 0 else 1
+			X_prev = jnp.ones((batched_graph.nodes.shape[1], state_dim))
 			rand_node_features = jnp.ones((batched_graph.nodes.shape[1], self.n_random_node_features))
 
 			input_graph_list = {"graphs": [jax.tree_util.tree_map(lambda x: x[0], input_graph_list["graphs"][0])]}
@@ -481,7 +483,9 @@ class TrainMeanField:
 
 			#node_features = self.n_diffusion_steps + self.n_random_node_features + self.n_bernoulli_features
 
-			X_prev = jnp.ones((U_net_graph_dict["graphs"][0].nodes.shape[0], 1))
+			# Use continuous_dim for continuous problems (e.g., ChipPlacement), otherwise 1 for discrete
+			state_dim = self.config.get("continuous_dim", 0) if self.config.get("continuous_dim", 0) > 0 else 1
+			X_prev = jnp.ones((U_net_graph_dict["graphs"][0].nodes.shape[0], state_dim))
 			rand_node_features = jnp.ones((U_net_graph_dict["graphs"][0].nodes.shape[0], self.n_random_node_features))
 			self.params = self.model.init({"params": subkey}, U_net_graph_dict, X_prev,rand_node_features, 0, subkey)
 			# X_prev = jnp.ones(batched_U_net_graph_dict["graphs"][0].nodes.shape[:-1] +(node_features,))
