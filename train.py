@@ -355,7 +355,8 @@ class TrainMeanField:
 								mean_aggr = self.mean_aggr,
 							   EncoderModel = self.graph_mode, n_random_node_features = self.n_random_node_features,
 							   train_mode = self.config["train_mode"],
-							   graph_norm = self.graph_norm, bfloat16 = self.bfloat16, dataset_name = self.dataset_name)
+							   graph_norm = self.graph_norm, bfloat16 = self.bfloat16, dataset_name = self.dataset_name,
+							   continuous_dim = self.config.get("continuous_dim", 0))
 
 
 	def __init_optimizer_and_params(self):
