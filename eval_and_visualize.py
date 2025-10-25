@@ -176,9 +176,10 @@ def evaluate_instance(trainer, instance_data, instance_id):
 
     # Prepare batch for model inference
     # Create batch dict in the format expected by trainer._prepare_graphs
+    # Note: _prepare_graphs expects lists of graphs (as from the dataloader's collate function)
     batch_dict = {
-        "input_graph": graph,
-        "energy_graph": graph  # Use same graph for both input and energy
+        "input_graph": [graph],  # Wrap in list
+        "energy_graph": [graph]  # Use same graph for both input and energy
     }
 
     # Use trainer's method to properly prepare and batch graphs for pmap
