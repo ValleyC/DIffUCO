@@ -347,9 +347,9 @@ class DiffModel(nn.Module):
 			# X_T shape: (batched_graph_nodes, n_states) or (batched_graph_nodes, n_states, continuous_dim)
 
 			if len(X_T.shape) == 2:  # (batched_graph_nodes, continuous_dim)
-				X_values = X_T
+				X_values = X_T[:, None, :]  # Add n_states dimension: (batched_graph_nodes, 1, continuous_dim)
 			elif len(X_T.shape) == 3:  # (batched_graph_nodes, n_states, continuous_dim)
-				X_values = X_T[:, 0, :]  # Take first state
+				X_values = X_T  # Use all states
 			else:
 				raise ValueError(f"Unexpected X_T shape in continuous mode: {X_T.shape}")
 
