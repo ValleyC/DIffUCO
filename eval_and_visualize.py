@@ -166,9 +166,10 @@ def evaluate_instance(trainer, instance_data, instance_id):
     graph = instance_data['H_graphs'][instance_id]
     initial_positions = instance_data['positions'][instance_id]
     component_sizes = graph.nodes
+    n_components = component_sizes.shape[0]  # Store original number of components
 
     print(f"\nEvaluating instance {instance_id}...")
-    print(f"  Components: {component_sizes.shape[0]}")
+    print(f"  Components: {n_components}")
 
     # Compute initial HPWL
     initial_hpwl = compute_hpwl(initial_positions, graph)
@@ -204,11 +205,11 @@ def evaluate_instance(trainer, instance_data, instance_id):
         )
 
         # Extract generated positions
-        # log_dict["X_0"] has shape [n_devices, n_nodes, n_basis_states, continuous_dim]
+        # log_dict["X_0"] has shape [n_devices, n_nodes_padded, n_basis_states, continuous_dim]
         X_0 = log_dict["X_0"]
 
-        # Take first device, all nodes, first basis state
-        generated_positions = np.array(X_0[0, :, 0, :])  # [n_nodes, 2]
+        # Take first device, only original components (exclude padding), first basis state
+        generated_positions = np.array(X_0[0, :n_components, 0, :])  # [n_components, 2]
 
         # Compute generated HPWL
         generated_hpwl = compute_hpwl(generated_positions, graph)
