@@ -2,7 +2,7 @@ import jax
 import numpy as np
 import jax.numpy as jnp
 import flax.linen as nn
-from Networks.Modules.MLPModules.MLPs import ProbMLP, ValueMLP, ReluMLP
+from Networks.Modules.MLPModules.MLPs import ProbMLP, ValueMLP
 from functools import partial
 import flax
 
@@ -35,10 +35,9 @@ class RLHeadModule_agg_before(nn.Module):
     def setup(self):
         if self.continuous_dim > 0:
             # Continuous mode: output mean and log_var for Gaussian
-            mean_features = list(self.n_features_list_prob) + [self.continuous_dim]
-            logvar_features = list(self.n_features_list_prob) + [self.continuous_dim]
-            self.meanMLP = ReluMLP(n_features_list=mean_features, dtype=self.dtype)
-            self.logvarMLP = ReluMLP(n_features_list=logvar_features, dtype=self.dtype)
+            # Use simple Dense layers (no final activation) like ContinuousHead
+            self.mean_layer = nn.Dense(features=self.continuous_dim, dtype=self.dtype, name="position_mean")
+            self.log_var_layer = nn.Dense(features=self.continuous_dim, dtype=self.dtype, name="position_log_var")
         else:
             # Discrete mode: output logits for categorical
             self.probMLP = ProbMLP(n_features_list=self.n_features_list_prob, dtype=self.dtype)
@@ -54,8 +53,10 @@ class RLHeadModule_agg_before(nn.Module):
         """
         if self.continuous_dim > 0:
             # Continuous mode
-            position_mean = self.meanMLP(x)
-            position_log_var = self.logvarMLP(x)
+            position_mean = self.mean_layer(x)
+            position_log_var = self.log_var_layer(x)
+            # Clip log_var for numerical stability
+            position_log_var = jnp.clip(position_log_var, -10.0, 2.0)
             out_dict["position_mean"] = position_mean
             out_dict["position_log_var"] = position_log_var
         else:
@@ -83,10 +84,9 @@ class RLHeadModule_agg_after(nn.Module):
     def setup(self):
         if self.continuous_dim > 0:
             # Continuous mode: output mean and log_var for Gaussian
-            mean_features = list(self.n_features_list_prob) + [self.continuous_dim]
-            logvar_features = list(self.n_features_list_prob) + [self.continuous_dim]
-            self.meanMLP = ReluMLP(n_features_list=mean_features, dtype=self.dtype)
-            self.logvarMLP = ReluMLP(n_features_list=logvar_features, dtype=self.dtype)
+            # Use simple Dense layers (no final activation) like ContinuousHead
+            self.mean_layer = nn.Dense(features=self.continuous_dim, dtype=self.dtype, name="position_mean")
+            self.log_var_layer = nn.Dense(features=self.continuous_dim, dtype=self.dtype, name="position_log_var")
         else:
             # Discrete mode: output logits for categorical
             self.probMLP = ProbMLP(n_features_list=self.n_features_list_prob, dtype=self.dtype)
@@ -102,8 +102,10 @@ class RLHeadModule_agg_after(nn.Module):
         """
         if self.continuous_dim > 0:
             # Continuous mode
-            position_mean = self.meanMLP(x)
-            position_log_var = self.logvarMLP(x)
+            position_mean = self.mean_layer(x)
+            position_log_var = self.log_var_layer(x)
+            # Clip log_var for numerical stability
+            position_log_var = jnp.clip(position_log_var, -10.0, 2.0)
             out_dict["position_mean"] = position_mean
             out_dict["position_log_var"] = position_log_var
         else:
