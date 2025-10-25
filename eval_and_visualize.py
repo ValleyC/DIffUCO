@@ -175,33 +175,31 @@ def evaluate_instance(trainer, instance_data, instance_id):
     print(f"  Initial HPWL: {initial_hpwl:.2f}")
 
     # Prepare batch for model inference
-    # Need to wrap graph in the expected format
-    energy_graph = graph  # Already in jraph format
+    # Create batch dict in the format expected by trainer._prepare_graphs
+    batch_dict = {
+        "input_graph": graph,
+        "energy_graph": graph  # Use same graph for both input and energy
+    }
 
-    # Add batch dimension for pmap
-    # The trainer expects pmapped inputs: [n_devices, ...]
-    n_devices = len(jax.devices())
-
-    # Replicate graph across devices
-    energy_graph_batch = jax.tree_map(lambda x: jnp.repeat(jnp.expand_dims(x, 0), n_devices, axis=0), energy_graph)
-
-    # Create graph dict
-    graph_dict = {"graphs": [graph]}  # List of single graph
-    graph_dict_batch = jax.tree_map(lambda x: jnp.repeat(jnp.expand_dims(x, 0), n_devices, axis=0) if isinstance(x, jnp.ndarray) else x, graph_dict)
+    # Use trainer's method to properly prepare and batch graphs for pmap
+    graph_dict_batch, energy_graph_batch = trainer._prepare_graphs(batch_dict, mode="val")
 
     # Generate key
     key = jax.random.PRNGKey(instance_id)
-    batched_key = jax.random.split(key, num=n_devices)
+    batched_key = jax.random.split(key, num=len(jax.devices()))
 
     # Run inference
     try:
         print(f"  Running model inference...")
-        loss, (log_dict, _) = trainer.TrainerClass.pmap_sample(
+        loss, (log_dict, _) = trainer.TrainerClass.evaluation_step(
             trainer.params,
             graph_dict_batch,
             energy_graph_batch,
             trainer.T,
-            batched_key
+            batched_key,
+            mode="eval",
+            epoch=0,
+            epochs=1
         )
 
         # Extract generated positions
