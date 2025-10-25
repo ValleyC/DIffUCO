@@ -269,38 +269,71 @@ class DiffModel(nn.Module):
 
 	@partial(flax.linen.jit, static_argnums=0)
 	def calc_log_q(self, params, jraph_graph_list, X_prev, rand_nodes, X_next, t_idx_per_node, key):
-		out_dict, key = self.apply(params, jraph_graph_list, X_prev, rand_nodes, t_idx_per_node, key)
+		"""
+		Calculate log probability of X_next under the model's predicted distribution.
 
-		spin_logits = out_dict["spin_logits"]
+		Args:
+			params: Model parameters
+			jraph_graph_list: Graph structure
+			X_prev: Previous state
+			rand_nodes: Random node features
+			X_next: Next state (for discrete: integer labels, for continuous: positions)
+			t_idx_per_node: Time index per node
+			key: Random key
+
+		Returns:
+			out_dict: Dictionary with log probabilities
+			key: Updated random key
+		"""
+		out_dict, key = self.apply(params, jraph_graph_list, X_prev, rand_nodes, t_idx_per_node, key)
 		node_graph_idx, n_graph, n_node = self.get_graph_info(jraph_graph_list)
 
-		one_hot_state = jax.nn.one_hot(X_next, num_classes=self.n_bernoulli_features)
-		#X_next = jnp.expand_dims(X_next, axis = -1)
-		spin_log_probs = jnp.sum(spin_logits * one_hot_state, axis=-1)
-		#print(X_next.shape, X_next, jnp.exp(spin_log_probs))
-		X_next_log_prob = self.__get_log_prob(spin_log_probs[...,0], node_graph_idx, n_graph)
+		if self.continuous_dim > 0:
+			# Continuous mode: compute log N(X_next | mean, var)
+			position_mean = out_dict["position_mean"]  # [num_components, 1, continuous_dim]
+			position_log_var = out_dict["position_log_var"]
 
-		# graph_log_prob = jax.lax.stop_gradient(jnp.exp((self.__get_log_prob(spin_log_probs[...,0], node_graph_idx, n_graph)/(n_node[:,None]*self.n_bernoulli_features))[:-1]))
-		# print("average prob T:0", jnp.mean(graph_log_prob))
-		out_dict["state_log_probs"] = X_next_log_prob
-		out_dict["spin_log_probs"] = spin_log_probs
+			# Ensure X_next has correct shape
+			if len(X_next.shape) == 2:  # [num_components, continuous_dim]
+				X_next_expanded = X_next[:, None, :]  # [num_components, 1, continuous_dim]
+			elif len(X_next.shape) == 3:
+				X_next_expanded = X_next
+			else:
+				raise ValueError(f"Unexpected X_next shape in continuous mode: {X_next.shape}")
+
+			# Compute log probability: log N(X_next | mean, var)
+			# log p = -0.5 * [(X - mean)^2 / var + log(var) + log(2*pi)]
+			diff = X_next_expanded - position_mean
+			log_prob_per_dim = -0.5 * (diff**2 / jnp.exp(position_log_var) + position_log_var + jnp.log(2 * jnp.pi))
+			position_log_probs = jnp.sum(log_prob_per_dim, axis=-1)  # Sum over continuous_dim -> [num_components, 1]
+
+			X_next_log_prob = self.__get_log_prob(position_log_probs[:, 0], node_graph_idx, n_graph)
+
+			out_dict["state_log_probs"] = X_next_log_prob
+			out_dict["position_log_probs"] = position_log_probs
+		else:
+			# Discrete mode
+			spin_logits = out_dict["spin_logits"]
+
+			one_hot_state = jax.nn.one_hot(X_next, num_classes=self.n_bernoulli_features)
+			spin_log_probs = jnp.sum(spin_logits * one_hot_state, axis=-1)
+			X_next_log_prob = self.__get_log_prob(spin_log_probs[...,0], node_graph_idx, n_graph)
+
+			out_dict["state_log_probs"] = X_next_log_prob
+			out_dict["spin_log_probs"] = spin_log_probs
+
 		return out_dict, key
 
 	@partial(flax.linen.jit, static_argnums=0)
 	def calc_log_q_T(self, j_graph, X_T):
 		'''
+		Calculate log probability of X_T under the prior distribution.
 
-		:param j_graph:
-		:param X_T: shape =  (batched_graph_nodes, n_states, 1)
-		:return:
+		:param j_graph: Graph structure
+		:param X_T: For discrete: shape = (batched_graph_nodes, n_states, 1)
+		            For continuous: shape = (batched_graph_nodes, n_states) or (batched_graph_nodes, n_states, continuous_dim)
+		:return: log_p_X_T: log probability per graph
 		'''
-
-		shape = X_T.shape[0:-1]
-		log_p_uniform = self._get_prior( shape)
-
-		one_hot_state = jax.nn.one_hot(X_T[...,-1], num_classes=self.n_bernoulli_features)
-		log_p_X_T_per_node = jnp.sum(log_p_uniform * one_hot_state, axis=-1)
-
 		nodes = j_graph.nodes
 		n_node = j_graph.n_node
 		n_graph = j_graph.n_node.shape[0]
@@ -308,10 +341,31 @@ class DiffModel(nn.Module):
 		total_nodes = jax.tree_util.tree_leaves(nodes)[0].shape[0]
 		node_graph_idx = jnp.repeat(graph_idx, n_node, axis=0, total_repeat_length=total_nodes)
 
+		if self.continuous_dim > 0:
+			# Continuous mode: compute log N(X_T | 0, I)
+			# Prior is N(0, I), so log p(X) = -0.5 * (X^2 + log(2*pi))
+			# X_T shape: (batched_graph_nodes, n_states) or (batched_graph_nodes, n_states, continuous_dim)
+
+			if len(X_T.shape) == 2:  # (batched_graph_nodes, continuous_dim)
+				X_values = X_T
+			elif len(X_T.shape) == 3:  # (batched_graph_nodes, n_states, continuous_dim)
+				X_values = X_T[:, 0, :]  # Take first state
+			else:
+				raise ValueError(f"Unexpected X_T shape in continuous mode: {X_T.shape}")
+
+			# Compute log probability per dimension, then sum
+			log_p_per_dim = -0.5 * (X_values**2 + jnp.log(2 * jnp.pi))
+			log_p_X_T_per_node = jnp.sum(log_p_per_dim, axis=-1)  # Sum over continuous_dim
+		else:
+			# Discrete mode: use one-hot encoding
+			shape = X_T.shape[0:-1]
+			log_p_uniform = self._get_prior(shape)
+
+			one_hot_state = jax.nn.one_hot(X_T[...,-1], num_classes=self.n_bernoulli_features)
+			log_p_X_T_per_node = jnp.sum(log_p_uniform * one_hot_state, axis=-1)
+
 		log_p_X_T = self.__get_log_prob(log_p_X_T_per_node, node_graph_idx, n_graph)
 
-		# graph_log_prob = jax.lax.stop_gradient(jnp.exp((self.__get_log_prob(log_p_X_T_per_node, node_graph_idx, n_graph)/(n_node[:,None]*self.n_bernoulli_features))[:-1]))
-		# print("average prob 0", jnp.mean(graph_log_prob))
 		return log_p_X_T
 
 	@partial(flax.linen.jit, static_argnums=(0,2))
@@ -356,9 +410,16 @@ class DiffModel(nn.Module):
 
 	@partial(flax.linen.jit, static_argnums=(0,2))
 	def sample_prior_w_probs(self, j_graph, N_basis_states, key):
-		X_T, one_hot_state, log_p_uniform, key = self.sample_prior(j_graph, N_basis_states, key)
+		"""
+		Sample from prior and compute log probabilities.
+
+		Returns:
+			For discrete: X_T, log_p_X_T, one_hot_state, log_p_uniform, key
+			For continuous: X_T, log_p_X_T, None, prior_params, key
+		"""
+		X_T, one_hot_state, prior_params, key = self.sample_prior(j_graph, N_basis_states, key)
 		log_p_X_T = self.calc_log_q_T(j_graph, X_T)
-		return X_T, log_p_X_T, one_hot_state, log_p_uniform, key
+		return X_T, log_p_X_T, one_hot_state, prior_params, key
 
 	@partial(flax.linen.jit, static_argnums=(0,1))
 	def _get_prior(self, shape):
