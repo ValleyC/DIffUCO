@@ -541,8 +541,17 @@ class PPO(Base):
         rewards = log_dict["RL"]["rewards"]
         reduced_rewards = rewards[:,:,:-1]
 
-        mov_average_reward, mov_std_reward =  self.MovingAverageClass.update_mov_averages(reduced_rewards)
-        normed_rewards = self.MovingAverageClass.calculate_average(rewards, mov_average_reward, mov_std_reward)
+        # EXPERIMENTAL: For continuous problems, skip reward normalization
+        # to preserve penalty weight magnitudes
+        if self.config.get("continuous_dim", 0) > 0:
+            # No reward normalization for continuous problems
+            normed_rewards = rewards
+            mov_average_reward = jnp.mean(reduced_rewards)
+            mov_std_reward = jnp.std(reduced_rewards)
+        else:
+            # Original reward normalization for discrete problems
+            mov_average_reward, mov_std_reward =  self.MovingAverageClass.update_mov_averages(reduced_rewards)
+            normed_rewards = self.MovingAverageClass.calculate_average(rewards, mov_average_reward, mov_std_reward)
 
         log_dict["RL"]["normed_rewards"] = normed_rewards
         log_dict["energies"]["normed_rewards"] = jnp.swapaxes(normed_rewards[:,:,:-1], 1, 2)
@@ -558,9 +567,19 @@ class PPO(Base):
 
     @partial(jax.jit, static_argnums=(0,))
     def _normalize_advantages(self, advantages):
-        unpadded_adv = advantages[:,:,:-1]
-        normed_advantages = (advantages - jnp.mean(unpadded_adv))/(jnp.std(unpadded_adv)+10**-10)
-        return normed_advantages
+        # EXPERIMENTAL: Disable advantage normalization for continuous problems
+        # Normalization destroys the absolute scale of penalties, making
+        # overlap_weight=10 and overlap_weight=2000 look similar after normalization
+        # For chip placement with large penalty weights, we need to preserve magnitude
+        if self.config.get("continuous_dim", 0) > 0:
+            # For continuous problems (chip placement): NO normalization
+            # Keep raw advantages to preserve penalty weight information
+            return advantages
+        else:
+            # For discrete problems (TSP, MaxCut, etc.): Original normalization
+            unpadded_adv = advantages[:,:,:-1]
+            normed_advantages = (advantages - jnp.mean(unpadded_adv))/(jnp.std(unpadded_adv)+10**-10)
+            return normed_advantages
 
     def get_loss(self, params, jraph_graph_list, batch_dict, key):
         return self.PPO_loss(params, jraph_graph_list, batch_dict, key)
