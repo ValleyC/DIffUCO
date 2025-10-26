@@ -15,8 +15,10 @@ from DatasetCreator.loadGraphDatasets.ChipDatasetGenerator_Unsupervised import C
 
 parser = argparse.ArgumentParser(description='Generate chip placement dataset')
 parser.add_argument('--dataset', default='Chip_small',
-                   choices=['Chip_small', 'Chip_20_components', 'Chip_50_components', 'Chip_dummy'],
-                   help='Dataset name')
+                   choices=['Chip_small', 'Chip_medium', 'Chip_large', 'Chip_huge',
+                           'Chip_20_components', 'Chip_50_components', 'Chip_100_components',
+                           'Chip_dummy'],
+                   help='Dataset name (Chip_small=~10, Chip_medium=~20, Chip_large=~40, Chip_huge=~100 components)')
 parser.add_argument('--seed', default=123, type=int, help='Random seed')
 parser.add_argument('--modes', default=['train', 'val', 'test'], nargs='+',
                    help='Which splits to generate (default: train val test)')

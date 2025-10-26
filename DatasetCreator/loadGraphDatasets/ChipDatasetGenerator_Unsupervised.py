@@ -203,11 +203,36 @@ class ChipDatasetGenerator(BaseDatasetGenerator):
         # 1. Sample target density
         stop_density = self._sample_uniform(0.75, 0.9)
 
-        # 2. SMALL TEST: Generate fewer, larger components (~8-12 components)
-        max_instance = 25  # Small pool to get ~8-12 placed components
+        # Component generation: Control number via pool size and component sizes
+        # For ~8-12 components with large sizes: max_instance=25, long_sizes=[0.4, 0.75]
+        # For ~15-25 components with smaller sizes: max_instance=60, long_sizes=[0.2, 0.5]
+        # For ~30-50 components with tiny sizes: max_instance=120, long_sizes=[0.1, 0.35]
+
+        # Parse dataset name to determine scale
+        if "small" in self.dataset_name.lower():
+            # Small: ~8-12 components, larger sizes
+            max_instance = 25
+            long_size_range = (0.4, 0.75)
+        elif "medium" in self.dataset_name.lower() or "20" in self.dataset_name:
+            # Medium: ~15-25 components, medium sizes
+            max_instance = 60
+            long_size_range = (0.2, 0.5)
+        elif "large" in self.dataset_name.lower() or "50" in self.dataset_name:
+            # Large: ~30-50 components, small sizes
+            max_instance = 120
+            long_size_range = (0.1, 0.35)
+        elif "huge" in self.dataset_name.lower() or "100" in self.dataset_name:
+            # Huge: ~60-100 components, tiny sizes
+            max_instance = 250
+            long_size_range = (0.08, 0.25)
+        else:
+            # Default: small
+            max_instance = 25
+            long_size_range = (0.4, 0.75)
+
         aspect_ratios = self._sample_uniform(0.4, 1.0, (max_instance,))  # More square-ish
-        # Use UNIFORM distribution for consistently large components (not exponential)
-        long_sizes = self._sample_uniform(0.4, 0.75, (max_instance,))
+        # Use UNIFORM distribution for consistently sized components
+        long_sizes = self._sample_uniform(long_size_range[0], long_size_range[1], (max_instance,))
         short_sizes = aspect_ratios * long_sizes
 
         # Random orientation
