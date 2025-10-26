@@ -137,6 +137,214 @@ def compute_boundary_penalty(positions, component_sizes, canvas_x_min=-1.0, canv
     return total_boundary_violation
 
 
+def compute_total_energy(positions, graph, component_sizes,
+                         overlap_weight=1.0, boundary_weight=1.0):
+    """
+    Compute total energy = HPWL + overlap_penalty + boundary_penalty
+
+    This is the objective function we want to minimize.
+    """
+    hpwl = compute_hpwl(positions, graph)
+    overlap = compute_overlap_penalty(positions, component_sizes)
+    boundary = compute_boundary_penalty(positions, component_sizes)
+
+    total_energy = hpwl + overlap_weight * overlap + boundary_weight * boundary
+    return total_energy
+
+
+def compute_netlist_degrees(graph):
+    """
+    Count how many nets each component is connected to.
+
+    Returns:
+        degrees: [n_components,] array of connection counts
+    """
+    n_components = graph.nodes.shape[0]
+    degrees = np.zeros(n_components)
+
+    for sender, receiver in zip(graph.senders, graph.receivers):
+        degrees[int(sender)] += 1
+        degrees[int(receiver)] += 1
+
+    return degrees
+
+
+def select_best_sample(X_0_samples, graph, component_sizes):
+    """
+    Evaluate all K samples and pick the one with lowest energy.
+
+    Args:
+        X_0_samples: [n_components, n_basis_states, 2]
+        graph: jraph.GraphsTuple
+        component_sizes: [n_components, 2]
+
+    Returns:
+        best_sample: [n_components, 2] - The sample with lowest energy
+        best_energy: float
+        best_idx: int - Index of best sample
+    """
+    n_basis_states = X_0_samples.shape[1]
+
+    best_sample = None
+    best_energy = float('inf')
+    best_idx = 0
+
+    for k in range(n_basis_states):
+        sample_positions = X_0_samples[:, k, :]  # [n_components, 2]
+
+        # Compute energy (HPWL + overlap + boundary penalties)
+        energy = compute_total_energy(sample_positions, graph, component_sizes)
+
+        if energy < best_energy:
+            best_energy = energy
+            best_sample = sample_positions
+            best_idx = k
+
+    return best_sample, best_energy, best_idx
+
+
+def is_position_legal(pos, size, placed_positions, canvas_bounds=[-1, 1]):
+    """
+    Check if a position is legal (in bounds + no overlap with placed components).
+
+    Args:
+        pos: (x, y) position of component center
+        size: (width, height) of component
+        placed_positions: dict {component_id: (pos, size)}
+        canvas_bounds: [min, max] for both x and y
+
+    Returns:
+        True if legal, False otherwise
+    """
+    x, y = pos
+    width, height = size
+
+    # Check 1: Within canvas bounds
+    x_min, y_min = x - width/2, y - height/2
+    x_max, y_max = x + width/2, y + height/2
+
+    canvas_min, canvas_max = canvas_bounds[0], canvas_bounds[1]
+
+    if x_min < canvas_min or x_max > canvas_max:
+        return False
+    if y_min < canvas_min or y_max > canvas_max:
+        return False
+
+    # Check 2: No overlap with already placed components
+    for placed_id, (placed_pos, placed_size) in placed_positions.items():
+        px, py = placed_pos
+        pw, ph = placed_size
+
+        # Compute overlap
+        overlap_width = max(0.0, min(x_max, px + pw/2) - max(x_min, px - pw/2))
+        overlap_height = max(0.0, min(y_max, py + ph/2) - max(y_min, py - ph/2))
+
+        if overlap_width > 1e-6 and overlap_height > 1e-6:
+            return False
+
+    return True
+
+
+def find_closest_legal_position(target_position, component_size, placed_positions,
+                                canvas_bounds=[-1, 1], max_search_radius=4.0):
+    """
+    Spiral search from target position to find closest legal position.
+
+    Args:
+        target_position: (x, y) where component wants to be
+        component_size: (width, height) of component
+        placed_positions: dict {component_id: (pos, size)}
+        canvas_bounds: [min, max]
+        max_search_radius: Maximum radius to search
+
+    Returns:
+        legal_position: (x, y) closest legal position
+    """
+    # Try target position first
+    if is_position_legal(target_position, component_size, placed_positions, canvas_bounds):
+        return target_position
+
+    # Spiral search parameters
+    min_step = min(component_size) / 4  # Fine-grained search
+    num_angles = 16  # Number of angles to try at each radius
+
+    # Spiral outward
+    for radius in np.arange(min_step, max_search_radius, min_step):
+        for angle in np.linspace(0, 2*np.pi, num_angles, endpoint=False):
+            candidate_x = target_position[0] + radius * np.cos(angle)
+            candidate_y = target_position[1] + radius * np.sin(angle)
+            candidate = np.array([candidate_x, candidate_y])
+
+            if is_position_legal(candidate, component_size, placed_positions, canvas_bounds):
+                return candidate
+
+    # Fallback: If no legal position found in spiral, try random positions
+    # This should rarely happen
+    print(f"Warning: Could not find legal position within radius {max_search_radius}, trying fallback")
+
+    canvas_min, canvas_max = canvas_bounds[0], canvas_bounds[1]
+    width, height = component_size
+
+    for _ in range(1000):
+        # Random position within valid range
+        x = np.random.uniform(canvas_min + width/2, canvas_max - width/2)
+        y = np.random.uniform(canvas_min + height/2, canvas_max - height/2)
+        candidate = np.array([x, y])
+
+        if is_position_legal(candidate, component_size, placed_positions, canvas_bounds):
+            return candidate
+
+    # Last resort: return target position even if illegal
+    print(f"Warning: Could not find any legal position, returning target")
+    return target_position
+
+
+def greedy_legalize(positions, component_sizes, graph, canvas_bounds=[-1, 1]):
+    """
+    Parameter-free greedy decoder to legalize a placement.
+
+    Algorithm:
+    1. Order components by netlist degree (more connected = higher priority)
+    2. Greedily place each component at closest legal position to its target
+
+    Args:
+        positions: [n_components, 2] - May have overlaps/out-of-bounds
+        component_sizes: [n_components, 2]
+        graph: jraph.GraphsTuple (netlist)
+        canvas_bounds: [min, max]
+
+    Returns:
+        legal_positions: [n_components, 2] - Fully legal placement
+    """
+    n_components = len(positions)
+
+    # Step 1: Order components by netlist degree (parameter-free!)
+    degrees = compute_netlist_degrees(graph)
+    component_order = np.argsort(degrees)[::-1]  # High to low
+
+    # Step 2: Greedy placement
+    placed_positions = {}  # {component_id: (pos, size)}
+    legal_positions_list = [None] * n_components
+
+    for comp_i in component_order:
+        target = positions[comp_i]
+        size = component_sizes[comp_i]
+
+        # Find closest legal position to target
+        legal_pos = find_closest_legal_position(
+            target_position=target,
+            component_size=size,
+            placed_positions=placed_positions,
+            canvas_bounds=canvas_bounds
+        )
+
+        # Record this placement
+        placed_positions[comp_i] = (legal_pos, size)
+        legal_positions_list[comp_i] = legal_pos
+
+    return np.array(legal_positions_list)
+
+
 def visualize_comparison(legal_pos, initial_pos, generated_pos, graph, component_sizes,
                          legal_metrics, initial_metrics, generated_metrics, instance_id, save_path=None):
     """
@@ -322,20 +530,40 @@ def evaluate_instance(trainer, instance_data, instance_id):
         # log_dict["X_0"] has shape [n_devices, n_nodes_padded, n_basis_states, continuous_dim]
         X_0 = log_dict["X_0"]
 
-        # Take first device, only original components (exclude padding), first basis state
-        generated_positions = np.array(X_0[0, :n_components, 0, :])  # [n_components, 2]
+        # Extract ALL K samples from first device, only original components (exclude padding)
+        X_0_samples = np.array(X_0[0, :n_components, :, :])  # [n_components, n_basis_states, 2]
 
-        # Compute generated metrics
+        print(f"  Model generated {X_0_samples.shape[1]} samples per component")
+
+        # Step 1: Select best sample by energy (parameter-free!)
+        best_sample, best_energy, best_idx = select_best_sample(X_0_samples, graph, component_sizes)
+        print(f"  Best sample: #{best_idx} with energy {best_energy:.2f}")
+
+        # Compute raw model output metrics (may be illegal)
+        raw_hpwl = compute_hpwl(best_sample, graph)
+        raw_overlap = compute_overlap_penalty(best_sample, component_sizes)
+        raw_boundary = compute_boundary_penalty(best_sample, component_sizes)
+
+        print(f"  Raw Model HPWL: {raw_hpwl:.2f}")
+        print(f"  Raw Model Overlap: {raw_overlap:.2f}")
+        print(f"  Raw Model Out-of-Bound: {raw_boundary:.2f}")
+
+        # Step 2: Apply greedy legalization decoder (parameter-free!)
+        print(f"  Applying greedy legalization decoder...")
+        legalized_positions = greedy_legalize(best_sample, component_sizes, graph)
+
+        # Compute legalized metrics (should be legal!)
+        generated_positions = legalized_positions
         generated_hpwl = compute_hpwl(generated_positions, graph)
         generated_overlap = compute_overlap_penalty(generated_positions, component_sizes)
         generated_boundary = compute_boundary_penalty(generated_positions, component_sizes)
 
         hpwl_improvement = (initial_hpwl - generated_hpwl) / initial_hpwl * 100
 
-        print(f"  Generated HPWL: {generated_hpwl:.2f}")
-        print(f"  Generated Overlap: {generated_overlap:.2f}")
-        print(f"  Generated Out-of-Bound: {generated_boundary:.2f}")
-        print(f"  HPWL Improvement: {hpwl_improvement:.1f}%")
+        print(f"  Legalized HPWL: {generated_hpwl:.2f}")
+        print(f"  Legalized Overlap: {generated_overlap:.2f}")
+        print(f"  Legalized Out-of-Bound: {generated_boundary:.2f}")
+        print(f"  HPWL Improvement (random→legalized): {hpwl_improvement:.1f}%")
 
     except Exception as e:
         print(f"  Error during inference: {e}")
