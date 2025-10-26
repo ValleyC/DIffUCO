@@ -63,7 +63,8 @@ class ChipDatasetGenerator(BaseDatasetGenerator):
             n_workers: Number of parallel workers (default: cpu_count())
         """
         solutions = {
-            "positions": [],
+            "positions": [],  # Randomized positions (training input)
+            "legal_positions": [],  # Legal positions (ground truth)
             "H_graphs": [],
             "sizes": [],
             "edge_attrs": [],
@@ -120,14 +121,15 @@ class ChipDatasetGenerator(BaseDatasetGenerator):
         torch.manual_seed(self.seed + self.mode_seed_offset() + idx)
 
         # Generate one chip placement instance
-        positions, H_graph, density, hpwl = self.sample_chip_instance_unsupervised()
+        randomized_positions, legal_positions, H_graph, density, hpwl = self.sample_chip_instance_unsupervised()
 
         # jraph.GraphsTuple is already serializable (it's a NamedTuple with numpy arrays)
         return {
             'idx': idx,
-            'positions': positions,
+            'positions': randomized_positions,  # Training input (randomized)
+            'legal_positions': legal_positions,  # Ground truth (legal placement)
             'H_graph': H_graph,
-            'graph_size': positions.shape[0],
+            'graph_size': randomized_positions.shape[0],
             'density': density,
             'hpwl': hpwl
         }
@@ -160,7 +162,8 @@ class ChipDatasetGenerator(BaseDatasetGenerator):
         # For chip placement, gs_bins is the positions (like TSP uses positions as gs_bins)
         gs_bins = result['positions']
 
-        solutions["positions"].append(result['positions'])
+        solutions["positions"].append(result['positions'])  # Randomized positions (training input)
+        solutions["legal_positions"].append(result['legal_positions'])  # Legal positions (ground truth)
         solutions["H_graphs"].append(H_graph)
         solutions["sizes"].append(sizes)
         solutions["edge_attrs"].append(edge_attrs)
@@ -172,7 +175,8 @@ class ChipDatasetGenerator(BaseDatasetGenerator):
 
         # Save individual instance
         indexed_solution_dict = {
-            "positions": result['positions'],
+            "positions": result['positions'],  # Randomized positions (training input)
+            "legal_positions": result['legal_positions'],  # Legal positions (ground truth)
             "H_graphs": H_graph,
             "sizes": sizes,
             "edge_attrs": edge_attrs,
@@ -194,10 +198,11 @@ class ChipDatasetGenerator(BaseDatasetGenerator):
         3. Randomize placement (shuffle positions)
 
         Returns:
-            positions: (V, 2) numpy array of component center positions
+            randomized_positions: (V, 2) numpy array of randomized component positions (training input)
+            legal_positions: (V, 2) numpy array of legal component positions (ground truth)
             H_graph: jraph.GraphsTuple with graph structure
             density: float, placement density
-            hpwl: float, Half-Perimeter Wirelength
+            hpwl: float, Half-Perimeter Wirelength (of randomized placement)
         """
 
         # 1. Sample target density
@@ -261,7 +266,8 @@ class ChipDatasetGenerator(BaseDatasetGenerator):
 
         # 7. Create jraph.GraphsTuple (like TSP dataset)
         # Convert torch tensors to numpy
-        positions_np = randomized_positions.numpy() if isinstance(randomized_positions, torch.Tensor) else randomized_positions
+        randomized_positions_np = randomized_positions.numpy() if isinstance(randomized_positions, torch.Tensor) else randomized_positions
+        legal_positions_np = initial_positions.numpy() if isinstance(initial_positions, torch.Tensor) else initial_positions
         sizes_np = placed_sizes.numpy() if isinstance(placed_sizes, torch.Tensor) else placed_sizes
         edge_index_np = edge_index.numpy() if isinstance(edge_index, torch.Tensor) else edge_index
         edge_attr_np = edge_attr.numpy() if isinstance(edge_attr, torch.Tensor) else edge_attr
@@ -279,7 +285,7 @@ class ChipDatasetGenerator(BaseDatasetGenerator):
             globals=None
         )
 
-        return positions_np, H_graph, actual_density, hpwl
+        return randomized_positions_np, legal_positions_np, H_graph, actual_density, hpwl
 
     def _generate_netlist_proximity_based(self, positions, sizes):
         """

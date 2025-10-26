@@ -137,20 +137,24 @@ def compute_boundary_penalty(positions, component_sizes, canvas_x_min=-1.0, canv
     return total_boundary_violation
 
 
-def visualize_comparison(initial_pos, generated_pos, graph, component_sizes,
-                         initial_metrics, generated_metrics, instance_id, save_path=None):
+def visualize_comparison(legal_pos, initial_pos, generated_pos, graph, component_sizes,
+                         legal_metrics, initial_metrics, generated_metrics, instance_id, save_path=None):
     """
-    Visualize initial vs generated placement side-by-side
+    Visualize ground truth, initial, and generated placements side-by-side
 
     Args:
-        initial_metrics: dict with 'hpwl', 'overlap', 'boundary'
-        generated_metrics: dict with 'hpwl', 'overlap', 'boundary'
+        legal_pos: (V, 2) array of legal positions (ground truth)
+        initial_pos: (V, 2) array of randomized positions
+        generated_pos: (V, 2) array of model-generated positions
+        legal_metrics: dict with 'hpwl', 'overlap', 'boundary' for ground truth
+        initial_metrics: dict with 'hpwl', 'overlap', 'boundary' for randomized
+        generated_metrics: dict with 'hpwl', 'overlap', 'boundary' for generated
     """
-    fig, axes = plt.subplots(1, 2, figsize=(16, 8))
+    fig, axes = plt.subplots(1, 3, figsize=(24, 8))
 
-    placements = [initial_pos, generated_pos]
-    titles = ["Initial Placement (Random)", "Generated Placement (Trained Model)"]
-    metrics = [initial_metrics, generated_metrics]
+    placements = [legal_pos, initial_pos, generated_pos]
+    titles = ["Ground Truth (Legal Placement)", "Initial (Random Placement)", "Generated (Model Output)"]
+    metrics = [legal_metrics, initial_metrics, generated_metrics]
 
     canvas_min, canvas_max = -1.0, 1.0
 
@@ -215,17 +219,24 @@ def visualize_comparison(initial_pos, generated_pos, graph, component_sizes,
                        fontsize=max(6, min(10, 200 // n_components)),
                        fontweight='bold', color='white', zorder=2)
 
-    # Compute improvements
+    # Compute improvements from random to generated
     hpwl_improvement = (initial_metrics['hpwl'] - generated_metrics['hpwl']) / max(initial_metrics['hpwl'], 1e-6) * 100
     overlap_improvement = (initial_metrics['overlap'] - generated_metrics['overlap']) / max(initial_metrics['overlap'], 1e-6) * 100 if initial_metrics['overlap'] > 0 else 0
     boundary_improvement = (initial_metrics['boundary'] - generated_metrics['boundary']) / max(initial_metrics['boundary'], 1e-6) * 100 if initial_metrics['boundary'] > 0 else 0
 
+    # How close to ground truth
+    hpwl_gap_to_gt = abs(generated_metrics['hpwl'] - legal_metrics['hpwl']) / max(legal_metrics['hpwl'], 1e-6) * 100
+
+    n_components = len(component_sizes)
     fig.suptitle(
         f"Instance {instance_id} - {n_components} Components\n"
-        f"HPWL: {initial_metrics['hpwl']:.1f} → {generated_metrics['hpwl']:.1f} ({hpwl_improvement:+.1f}%) | "
-        f"Overlap: {initial_metrics['overlap']:.2f} → {generated_metrics['overlap']:.2f} ({overlap_improvement:+.1f}%) | "
-        f"Out-of-Bound: {initial_metrics['boundary']:.2f} → {generated_metrics['boundary']:.2f} ({boundary_improvement:+.1f}%)",
-        fontsize=14,
+        f"HPWL: GT={legal_metrics['hpwl']:.1f} | Random={initial_metrics['hpwl']:.1f} | Model={generated_metrics['hpwl']:.1f} "
+        f"(Improvement: {hpwl_improvement:+.1f}%, Gap to GT: {hpwl_gap_to_gt:.1f}%)\n"
+        f"Overlap: GT={legal_metrics['overlap']:.2f} | Random={initial_metrics['overlap']:.2f} | Model={generated_metrics['overlap']:.2f} "
+        f"({overlap_improvement:+.1f}%)\n"
+        f"Out-of-Bound: GT={legal_metrics['boundary']:.2f} | Random={initial_metrics['boundary']:.2f} | Model={generated_metrics['boundary']:.2f} "
+        f"({boundary_improvement:+.1f}%)",
+        fontsize=12,
         fontweight='bold'
     )
 
@@ -252,19 +263,29 @@ def evaluate_instance(trainer, instance_data, instance_id):
     """
     # Get instance data
     graph = instance_data['H_graphs'][instance_id]
-    initial_positions = instance_data['positions'][instance_id]
+    initial_positions = instance_data['positions'][instance_id]  # Randomized positions (training input)
+    legal_positions = instance_data['legal_positions'][instance_id]  # Legal positions (ground truth)
     component_sizes = graph.nodes
     n_components = component_sizes.shape[0]  # Store original number of components
 
     print(f"\nEvaluating instance {instance_id}...")
     print(f"  Components: {n_components}")
 
-    # Compute initial metrics
+    # Compute legal (ground truth) metrics
+    legal_hpwl = compute_hpwl(legal_positions, graph)
+    legal_overlap = compute_overlap_penalty(legal_positions, component_sizes)
+    legal_boundary = compute_boundary_penalty(legal_positions, component_sizes)
+
+    print(f"  Ground Truth (Legal) HPWL: {legal_hpwl:.2f}")
+    print(f"  Ground Truth Overlap: {legal_overlap:.2f}")
+    print(f"  Ground Truth Out-of-Bound: {legal_boundary:.2f}")
+
+    # Compute initial (randomized) metrics
     initial_hpwl = compute_hpwl(initial_positions, graph)
     initial_overlap = compute_overlap_penalty(initial_positions, component_sizes)
     initial_boundary = compute_boundary_penalty(initial_positions, component_sizes)
 
-    print(f"  Initial HPWL: {initial_hpwl:.2f}")
+    print(f"  Initial (Random) HPWL: {initial_hpwl:.2f}")
     print(f"  Initial Overlap: {initial_overlap:.2f}")
     print(f"  Initial Out-of-Bound: {initial_boundary:.2f}")
 
@@ -327,6 +348,12 @@ def evaluate_instance(trainer, instance_data, instance_id):
         hpwl_improvement = 0.0
 
     # Create metric dictionaries
+    legal_metrics = {
+        'hpwl': legal_hpwl,
+        'overlap': legal_overlap,
+        'boundary': legal_boundary
+    }
+
     initial_metrics = {
         'hpwl': initial_hpwl,
         'overlap': initial_overlap,
@@ -341,6 +368,8 @@ def evaluate_instance(trainer, instance_data, instance_id):
 
     result = {
         'instance_id': instance_id,
+        'legal_positions': legal_positions,
+        'legal_metrics': legal_metrics,
         'initial_positions': initial_positions,
         'initial_metrics': initial_metrics,
         'generated_positions': generated_positions,
@@ -359,15 +388,24 @@ def print_summary(results):
     print("EVALUATION SUMMARY")
     print("=" * 80)
 
+    legal_hpwls = [r['legal_metrics']['hpwl'] for r in results]
     initial_hpwls = [r['initial_metrics']['hpwl'] for r in results]
     generated_hpwls = [r['generated_metrics']['hpwl'] for r in results]
+    legal_overlaps = [r['legal_metrics']['overlap'] for r in results]
     initial_overlaps = [r['initial_metrics']['overlap'] for r in results]
     generated_overlaps = [r['generated_metrics']['overlap'] for r in results]
+    legal_boundaries = [r['legal_metrics']['boundary'] for r in results]
     initial_boundaries = [r['initial_metrics']['boundary'] for r in results]
     generated_boundaries = [r['generated_metrics']['boundary'] for r in results]
     hpwl_improvements = [r['hpwl_improvement'] for r in results]
 
     print(f"\nNumber of instances: {len(results)}")
+
+    print(f"\nGround Truth (Legal) HPWL:")
+    print(f"  Mean: {np.mean(legal_hpwls):.2f}")
+    print(f"  Std:  {np.std(legal_hpwls):.2f}")
+    print(f"  Min:  {np.min(legal_hpwls):.2f}")
+    print(f"  Max:  {np.max(legal_hpwls):.2f}")
 
     print(f"\nInitial HPWL (random placement):")
     print(f"  Mean: {np.mean(initial_hpwls):.2f}")
@@ -387,6 +425,12 @@ def print_summary(results):
     print(f"  Min:  {np.min(hpwl_improvements):.1f}%")
     print(f"  Max:  {np.max(hpwl_improvements):.1f}%")
 
+    print(f"\nGround Truth (Legal) Overlap:")
+    print(f"  Mean: {np.mean(legal_overlaps):.2f}")
+    print(f"  Std:  {np.std(legal_overlaps):.2f}")
+    print(f"  Min:  {np.min(legal_overlaps):.2f}")
+    print(f"  Max:  {np.max(legal_overlaps):.2f}")
+
     print(f"\nInitial Overlap (random placement):")
     print(f"  Mean: {np.mean(initial_overlaps):.2f}")
     print(f"  Std:  {np.std(initial_overlaps):.2f}")
@@ -398,6 +442,12 @@ def print_summary(results):
     print(f"  Std:  {np.std(generated_overlaps):.2f}")
     print(f"  Min:  {np.min(generated_overlaps):.2f}")
     print(f"  Max:  {np.max(generated_overlaps):.2f}")
+
+    print(f"\nGround Truth (Legal) Out-of-Bound:")
+    print(f"  Mean: {np.mean(legal_boundaries):.2f}")
+    print(f"  Std:  {np.std(legal_boundaries):.2f}")
+    print(f"  Min:  {np.min(legal_boundaries):.2f}")
+    print(f"  Max:  {np.max(legal_boundaries):.2f}")
 
     print(f"\nInitial Out-of-Bound (random placement):")
     print(f"  Mean: {np.mean(initial_boundaries):.2f}")
@@ -464,10 +514,12 @@ def main():
         # Visualize
         save_path = output_dir / f"instance_{i}_comparison.png"
         visualize_comparison(
+            result['legal_positions'],
             result['initial_positions'],
             result['generated_positions'],
             result['graph'],
             result['component_sizes'],
+            result['legal_metrics'],
             result['initial_metrics'],
             result['generated_metrics'],
             i,
