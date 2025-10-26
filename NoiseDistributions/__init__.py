@@ -5,7 +5,16 @@ from .CombinedNoiseDistr import CombinedNoiseDistr
 from .GaussianNoise import GaussianNoiseDistr
 
 ### TODO implement mixture of AnnealedNoise and Bernoulli Noise
-noise_distribution_registry = {"annealed_obj": AnnealedNoiseDistr, "bernoulli": BernoulliNoiseDistr, "categorical": CategoricalNoseDistr, "combined": CombinedNoiseDistr, "gaussian": GaussianNoiseDistr}
+noise_distribution_registry = {
+    "annealed_obj": AnnealedNoiseDistr,
+    "bernoulli": BernoulliNoiseDistr,
+    "categorical": CategoricalNoseDistr,
+    "combined": CombinedNoiseDistr,
+    "gaussian": GaussianNoiseDistr,
+    # Test schedules for annealing experiments (all use AnnealedNoiseDistr)
+    "test_constant": AnnealedNoiseDistr,  # gamma=1.0 at all steps
+    "test_reversed": AnnealedNoiseDistr   # gamma strong early, weak late
+}
 
 
 
