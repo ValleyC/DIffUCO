@@ -458,23 +458,29 @@ def minimal_disruption_legalize(positions, component_sizes, graph, canvas_bounds
     return legal_positions
 
 
-def iterative_push_apart_legalize(positions, component_sizes, canvas_bounds=[-1, 1],
+def iterative_push_apart_legalize(positions, component_sizes, graph=None, canvas_bounds=[-1, 1],
                                    max_iterations=100, overlap_threshold=1e-6):
     """
     Iterative "push apart" legalization that minimally adjusts positions.
 
     This preserves the model's learned spatial structure while eliminating overlaps.
 
+    NETLIST-AWARE: Connected components are pushed apart less to preserve HPWL.
+
     Algorithm:
     1. Start with model's predicted positions
-    2. Detect overlapping pairs
-    3. Push overlapping components apart by minimum distance
-    4. Handle boundary violations by nudging components back in
-    5. Repeat until no violations (or max iterations)
+    2. Build netlist connectivity lookup
+    3. Detect overlapping pairs
+    4. Push overlapping components apart by minimum distance
+       - Connected components: push less (preserve HPWL)
+       - Unconnected components: push more (no penalty)
+    5. Handle boundary violations by nudging components back in
+    6. Repeat until no violations (or max iterations)
 
     Args:
         positions: [n_components, 2] - Model predictions
         component_sizes: [n_components, 2]
+        graph: jraph.GraphsTuple - Netlist (optional, for netlist-aware pushing)
         canvas_bounds: [min, max]
         max_iterations: Maximum number of refinement iterations
         overlap_threshold: Minimum overlap to consider
@@ -486,6 +492,15 @@ def iterative_push_apart_legalize(positions, component_sizes, canvas_bounds=[-1,
     legal_positions = positions.copy()
 
     canvas_min, canvas_max = canvas_bounds[0], canvas_bounds[1]
+
+    # Build netlist connectivity lookup (parameter-free!)
+    connected_pairs = set()
+    if graph is not None:
+        for sender, receiver in zip(graph.senders, graph.receivers):
+            i, j = int(sender), int(receiver)
+            # Store both directions for easy lookup
+            connected_pairs.add((min(i, j), max(i, j)))
+        print(f"    Netlist has {len(connected_pairs)} connected pairs")
 
     for iteration in range(max_iterations):
         moved = False
@@ -541,7 +556,20 @@ def iterative_push_apart_legalize(positions, component_sizes, canvas_bounds=[-1,
 
                     # Required separation distance (sum of half-sizes in push direction)
                     # Use minimum of overlap dimensions to determine push amount
-                    push_amount = (min(overlap_x, overlap_y) / 2.0) + 0.01  # Small margin
+                    base_push_amount = (min(overlap_x, overlap_y) / 2.0) + 0.01  # Small margin
+
+                    # NETLIST-AWARE: Adjust push amount based on connectivity (parameter-free!)
+                    pair_key = (min(i, j), max(i, j))
+                    if pair_key in connected_pairs:
+                        # Connected in netlist - push less to preserve HPWL
+                        # Model wants them close, so minimal separation
+                        push_multiplier = 0.6  # Push only 60% of normal amount
+                    else:
+                        # Not connected - push more aggressively
+                        # No penalty for separating them
+                        push_multiplier = 1.2  # Push 120% to ensure separation
+
+                    push_amount = base_push_amount * push_multiplier
 
                     # Push both components apart (equal force)
                     legal_positions[i] -= direction * push_amount / 2
@@ -764,9 +792,9 @@ def evaluate_instance(trainer, instance_data, instance_id):
         print(f"  Raw Model Overlap: {raw_overlap:.2f}")
         print(f"  Raw Model Out-of-Bound: {raw_boundary:.2f}")
 
-        # Step 2: Apply iterative push-apart legalization decoder (parameter-free!)
-        print(f"  Applying iterative push-apart decoder...")
-        legalized_positions = iterative_push_apart_legalize(best_sample, component_sizes)
+        # Step 2: Apply netlist-aware iterative push-apart decoder (parameter-free!)
+        print(f"  Applying netlist-aware push-apart decoder...")
+        legalized_positions = iterative_push_apart_legalize(best_sample, component_sizes, graph)
 
         # Compute legalized metrics (should be legal!)
         generated_positions = legalized_positions
