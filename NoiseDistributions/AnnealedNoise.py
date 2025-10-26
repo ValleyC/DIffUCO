@@ -18,7 +18,20 @@ class AnnealedNoiseDistr(BaseNoiseDistr):
             beta = 1-jnp.cos( jnp.pi/2 * ( n_diffusion_steps - (t + 1 ) )/n_diffusion_steps )
             beta = max([beta, 0.])
             print(beta, t , "beta")
+        elif(self.config["noise_potential"] == "test_constant"):
+            # Test: constant gamma = 1.0 at all diffusion steps
+            # This provides full energy signal throughout reverse diffusion
+            beta = 1.0
+            print(f"Step {t}: beta = {beta} (CONSTANT)")
+        elif(self.config["noise_potential"] == "test_reversed"):
+            # Test: reversed schedule - strong signal early (random positions), weak signal late (refined)
+            # Original: gamma = [0.0, 0.1, 0.2, ..., 0.9] in reverse diffusion
+            # Reversed: gamma = [0.9, 0.8, 0.7, ..., 0.0] in reverse diffusion
+            beta = k * (1. * (t + 1) / (n_diffusion_steps))
+            print(f"Step {t}: beta = {beta:.2f} (REVERSED)")
         else:
+            # Original schedule: weak early, strong late
+            # gamma = [0.0, 0.1, 0.2, ..., 0.9] in reverse diffusion
             beta = k * (1. - 1. * (t + 1) / (n_diffusion_steps))
         return beta
 

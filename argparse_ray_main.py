@@ -27,7 +27,7 @@ parser.add_argument('--n_rand_nodes', default=2, type = int, help='define node e
 parser.add_argument('--stop_epochs', default=10000, type = int, help='define early stopping')
 parser.add_argument('--n_diffusion_steps', default=[9], type = int, help='define number of diffusion steps', nargs = "+")
 parser.add_argument('--time_encoding', default="one_hot", type = str, help='encoding of diffusion steps')
-parser.add_argument('--noise_potential', default = ["annealed_obj"], type = str, choices = ["bernoulli", "boltzmann_noise", "diffusion", "annealed_obj", "categorical", "combined", "gaussian"], help='define the diffusion mode', nargs = "+")
+parser.add_argument('--noise_potential', default = ["annealed_obj"], type = str, choices = ["bernoulli", "boltzmann_noise", "diffusion", "annealed_obj", "categorical", "combined", "gaussian", "test_constant", "test_reversed"], help='define the diffusion mode', nargs = "+")
 parser.add_argument('--n_basis_states', default=[10], type = int, help='number of states per graph', nargs = "+")
 parser.add_argument('--n_test_basis_states', default=8, type = int, help='number of states per graph during test time')
 parser.add_argument('--batch_size', default=[30], type = int, help='number of graphs within a batch', nargs = "+")
