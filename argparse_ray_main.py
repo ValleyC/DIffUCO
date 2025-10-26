@@ -9,7 +9,7 @@ parser.add_argument('--multi_gpu', action='store_true', help='wheter to use mult
 parser.add_argument('--mode', default='Diffusion', choices = ["Diffusion"], help='Define the Approach')
 parser.add_argument('--EnergyFunction', default='MIS', choices = ["MaxCut", "MIS", "MVC", "MaxCl", "WMIS", "MDS", "MaxClv2", "TSP", "IsingModel", "SpinGlass", "SpinGlass", "ChipPlacement"], help='Define the EnergyFunction of the IsingModel')
 parser.add_argument('--IsingMode', default='RB_iid_100', choices = ["Gset","BA_large","RB_iid_small", "RB_iid_dummy", "BA_dummy", "RB_iid_large" ,"RRG_200_k_=all", "BA_small","TSP_random_100",
-                                                                    "TSP_random_20", "COLLAB", "IMDB-BINARY", "RB_iid_100_dummy" , "RB_iid_100", "RB_iid_200", "NxNLattice_4x4", "NxNLattice_8x8", "NxNLattice_16x16", "NxNLattice_10x10", "SpinGlassUniform_10x10", "SpinGlass_16x16", "NxNLattice_24x24", "NxNLattice_32x32", "Chip_dummy", "Chip_small", "Chip_20_components", "Chip_50_components"], help='Define the Training dataset')
+                                                                    "TSP_random_20", "COLLAB", "IMDB-BINARY", "RB_iid_100_dummy" , "RB_iid_100", "RB_iid_200", "NxNLattice_4x4", "NxNLattice_8x8", "NxNLattice_16x16", "NxNLattice_10x10", "SpinGlassUniform_10x10", "SpinGlass_16x16", "NxNLattice_24x24", "NxNLattice_32x32", "Chip_dummy", "Chip_small", "Chip_medium", "Chip_large", "Chip_huge", "Chip_20_components", "Chip_50_components", "Chip_100_components"], help='Define the Training dataset')
 parser.add_argument('--graph_mode', default='normal', choices = ["normal", "TSPModel", "Transformer", "UNet"], help='Use U-Net or normal GNN, TSP model is a graph based implementation of the transformer, transformer is to be prefered')
 parser.add_argument('--train_mode', default='REINFORCE', choices = ["REINFORCE", "PPO", "Forward_KL"], help='Use U-Net or normal GNN')
 parser.add_argument('--AnnealSchedule', default='linear', choices = ["linear", "cosine", "exp"], help='Define the Annealing Schedule')
@@ -48,6 +48,10 @@ parser.add_argument('--diff_schedule', default= "own", type = str, help='define 
 parser.add_argument('--proj_method', default= "None", choices = ["CE", "feasible", "None"], type = str, help='define projection method')
 parser.add_argument('--overlap_weight', default=2000.0, type = float, help='overlap penalty weight for chip placement')
 parser.add_argument('--boundary_weight', default=2000.0, type = float, help='boundary penalty weight for chip placement')
+parser.add_argument('--use_normalization', action='store_true', help='use normalization for continuous problems (TSP-style, default True)')
+parser.add_argument('--no-use_normalization', dest='use_normalization', action='store_false', help='disable normalization (use reward scaling instead)')
+parser.add_argument('--reward_scale', default=0.01, type=float, help='reward scaling factor when normalization is disabled (default 0.01)')
+parser.set_defaults(use_normalization=True)  # Default to True (TSP-style normalization)
 parser.add_argument('--linear_message_passing', action='store_true')
 parser.add_argument('--no-linear_message_passing', dest='linear_message_passing', action='store_false')
 parser.add_argument('--relaxed', action='store_true')
@@ -249,6 +253,8 @@ def detect_and_run_for_loops():
                                                 "value_weighting": args.value_weighting,
                                                 "overlap_weight": args.overlap_weight,
                                                 "boundary_weight": args.boundary_weight,
+                                                "use_normalization": args.use_normalization,
+                                                "reward_scale": args.reward_scale,
                                             }
 
                                             # Add continuous_dim for ChipPlacement
@@ -329,8 +335,10 @@ def run( flexible_config, overwrite = True):
         "clip_value": 0.2,
         "value_weighting": 0.65,
         "continuous_dim": 0,  # Default 0 for discrete; set to 2 for ChipPlacement
-        "overlap_weight": 2000.0,  # ChipPlacement: overlap penalty weight
-        "boundary_weight": 2000.0  # ChipPlacement: boundary penalty weight
+        "overlap_weight": 2000.0,  # ChipPlacement: overlap penalty weight (use 50-100 with normalization!)
+        "boundary_weight": 2000.0,  # ChipPlacement: boundary penalty weight (use 50-100 with normalization!)
+        "use_normalization": True,  # ChipPlacement: use normalization (TSP-style, default True)
+        "reward_scale": 0.01  # ChipPlacement: reward scaling when normalization disabled
     }
 
     if(overwrite):

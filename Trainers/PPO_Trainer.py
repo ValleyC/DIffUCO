@@ -541,9 +541,14 @@ class PPO(Base):
         rewards = log_dict["RL"]["rewards"]
         reduced_rewards = rewards[:,:,:-1]
 
-        # EXPERIMENTAL: For continuous problems, use reward scaling instead of normalization
-        # to preserve penalty weight magnitudes while preventing gradient explosions
-        if self.config.get("continuous_dim", 0) > 0:
+        # Two approaches for continuous problems:
+        # 1. Normalization + moderate weights (TSP-style) - DEFAULT, more stable
+        # 2. Reward scaling + any weights - Alternative if normalization fails
+
+        use_normalization = self.config.get("use_normalization", True)  # Default: True (like TSP)
+
+        if self.config.get("continuous_dim", 0) > 0 and not use_normalization:
+            # Approach 2: Reward scaling (no normalization)
             # Scale rewards to keep magnitudes reasonable for PPO
             # Default scale 0.01: energy of -1000 becomes -10 (manageable)
             # This preserves relative importance: overlap_weight=100 is still 100× worse than HPWL=1
@@ -554,16 +559,27 @@ class PPO(Base):
 
             # Log the scaling for monitoring (only once)
             if not hasattr(self, '_reward_scale_logged'):
-                print(f"\n=== Continuous Problem: Using Reward Scaling ===")
+                print(f"\n=== Continuous Problem: Using Reward Scaling (Normalization Disabled) ===")
+                print(f"  use_normalization = False")
                 print(f"  reward_scale = {reward_scale}")
                 print(f"  Example: energy=-1000 → reward={-1000 * reward_scale}")
-                print(f"  Preserves weight ratios while preventing gradient explosions")
-                print(f"===================================================\n")
+                print(f"  Recommended: overlap_weight=100-200, boundary_weight=100-200")
+                print(f"====================================================================\n")
                 self._reward_scale_logged = True
         else:
-            # Original reward normalization for discrete problems
+            # Approach 1: Standard normalization (like TSP)
+            # For continuous problems with normalization, use MODERATE weights
             mov_average_reward, mov_std_reward =  self.MovingAverageClass.update_mov_averages(reduced_rewards)
             normed_rewards = self.MovingAverageClass.calculate_average(rewards, mov_average_reward, mov_std_reward)
+
+            # Log normalization approach for continuous problems (only once)
+            if self.config.get("continuous_dim", 0) > 0 and not hasattr(self, '_normalization_logged'):
+                print(f"\n=== Continuous Problem: Using Normalization (TSP-style) ===")
+                print(f"  use_normalization = True (default)")
+                print(f"  Recommended: overlap_weight=50-100, boundary_weight=50-100")
+                print(f"  This matches TSP's approach (A=1.45, moderate penalties)")
+                print(f"================================================================\n")
+                self._normalization_logged = True
 
         log_dict["RL"]["normed_rewards"] = normed_rewards
         log_dict["energies"]["normed_rewards"] = jnp.swapaxes(normed_rewards[:,:,:-1], 1, 2)
@@ -579,16 +595,16 @@ class PPO(Base):
 
     @partial(jax.jit, static_argnums=(0,))
     def _normalize_advantages(self, advantages):
-        # EXPERIMENTAL: For continuous problems, use mild centering without std division
-        # This prevents extreme outliers while preserving relative magnitudes
-        if self.config.get("continuous_dim", 0) > 0:
-            # For continuous problems: center at mean but DON'T divide by std
-            # This preserves penalty weight information better than full normalization
+        use_normalization = self.config.get("use_normalization", True)
+
+        if self.config.get("continuous_dim", 0) > 0 and not use_normalization:
+            # Approach 2: Mild centering without std division (for reward scaling)
+            # This prevents extreme outliers while preserving relative magnitudes
             unpadded_adv = advantages[:,:,:-1]
             centered_advantages = advantages - jnp.mean(unpadded_adv)
             return centered_advantages
         else:
-            # For discrete problems (TSP, MaxCut, etc.): Original normalization
+            # Approach 1: Standard normalization (like TSP and discrete problems)
             unpadded_adv = advantages[:,:,:-1]
             normed_advantages = (advantages - jnp.mean(unpadded_adv))/(jnp.std(unpadded_adv)+10**-10)
             return normed_advantages
