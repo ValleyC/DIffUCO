@@ -62,24 +62,107 @@ def compute_hpwl(positions, graph):
     return total_hpwl
 
 
+def compute_overlap_penalty(positions, component_sizes):
+    """
+    Compute overlap penalty between components.
+
+    Args:
+        positions: component positions [n_components, 2]
+        component_sizes: component sizes [n_components, 2] (width, height)
+
+    Returns:
+        total_overlap_area: sum of overlap areas
+    """
+    n_components = len(positions)
+    half_sizes = component_sizes / 2.0
+
+    # Component bounding boxes
+    x_min = positions[:, 0] - half_sizes[:, 0]
+    y_min = positions[:, 1] - half_sizes[:, 1]
+    x_max = positions[:, 0] + half_sizes[:, 0]
+    y_max = positions[:, 1] + half_sizes[:, 1]
+
+    total_overlap = 0.0
+
+    # Check all pairs
+    for i in range(n_components):
+        for j in range(i + 1, n_components):
+            # Compute overlap
+            overlap_width = max(0.0, min(x_max[i], x_max[j]) - max(x_min[i], x_min[j]))
+            overlap_height = max(0.0, min(y_max[i], y_max[j]) - max(y_min[i], y_min[j]))
+            overlap_area = overlap_width * overlap_height
+            total_overlap += overlap_area
+
+    return total_overlap
+
+
+def compute_boundary_penalty(positions, component_sizes, canvas_x_min=-1.0, canvas_y_min=-1.0,
+                             canvas_width=2.0, canvas_height=2.0):
+    """
+    Compute boundary violation penalty.
+
+    Args:
+        positions: component positions [n_components, 2]
+        component_sizes: component sizes [n_components, 2]
+        canvas_x_min, canvas_y_min: canvas minimum coordinates
+        canvas_width, canvas_height: canvas dimensions
+
+    Returns:
+        total_boundary_violation: sum of out-of-bounds areas
+    """
+    half_sizes = component_sizes / 2.0
+
+    # Component bounding boxes
+    x_min = positions[:, 0] - half_sizes[:, 0]
+    y_min = positions[:, 1] - half_sizes[:, 1]
+    x_max = positions[:, 0] + half_sizes[:, 0]
+    y_max = positions[:, 1] + half_sizes[:, 1]
+
+    # Canvas boundaries
+    canvas_x_max = canvas_x_min + canvas_width
+    canvas_y_max = canvas_y_min + canvas_height
+
+    # Out-of-bounds violations
+    left_violation = np.maximum(0.0, canvas_x_min - x_min)
+    right_violation = np.maximum(0.0, x_max - canvas_x_max)
+    bottom_violation = np.maximum(0.0, canvas_y_min - y_min)
+    top_violation = np.maximum(0.0, y_max - canvas_y_max)
+
+    # Approximate out-of-bounds "area"
+    x_violation = (left_violation + right_violation) * component_sizes[:, 1]
+    y_violation = (bottom_violation + top_violation) * component_sizes[:, 0]
+
+    total_boundary_violation = np.sum(x_violation + y_violation)
+
+    return total_boundary_violation
+
+
 def visualize_comparison(initial_pos, generated_pos, graph, component_sizes,
-                         initial_hpwl, generated_hpwl, instance_id, save_path=None):
+                         initial_metrics, generated_metrics, instance_id, save_path=None):
     """
     Visualize initial vs generated placement side-by-side
+
+    Args:
+        initial_metrics: dict with 'hpwl', 'overlap', 'boundary'
+        generated_metrics: dict with 'hpwl', 'overlap', 'boundary'
     """
     fig, axes = plt.subplots(1, 2, figsize=(16, 8))
 
     placements = [initial_pos, generated_pos]
     titles = ["Initial Placement (Random)", "Generated Placement (Trained Model)"]
-    hpwls = [initial_hpwl, generated_hpwl]
+    metrics = [initial_metrics, generated_metrics]
 
     canvas_min, canvas_max = -1.0, 1.0
 
-    for ax_idx, (ax, positions, title, hpwl) in enumerate(zip(axes, placements, titles, hpwls)):
+    for ax_idx, (ax, positions, title, metric) in enumerate(zip(axes, placements, titles, metrics)):
         ax.set_xlim(canvas_min - 0.1, canvas_max + 0.1)
         ax.set_ylim(canvas_min - 0.1, canvas_max + 0.1)
         ax.set_aspect('equal')
-        ax.set_title(f"{title}\nHPWL = {hpwl:.2f}", fontsize=14, fontweight='bold')
+        title_text = f"{title}\n"
+        title_text += f"HPWL = {metric['hpwl']:.2f} | "
+        title_text += f"Overlap = {metric['overlap']:.2f} | "
+        title_text += f"Out-of-Bound = {metric['boundary']:.2f}"
+        ax.set_title(title_text, fontsize=12, fontweight='bold')
         ax.set_xlabel('X position', fontsize=12)
         ax.set_ylabel('Y position', fontsize=12)
         ax.grid(True, alpha=0.3)
@@ -132,12 +215,17 @@ def visualize_comparison(initial_pos, generated_pos, graph, component_sizes,
                        fontsize=max(6, min(10, 200 // n_components)),
                        fontweight='bold', color='white', zorder=2)
 
-    improvement = (initial_hpwl - generated_hpwl) / initial_hpwl * 100
+    # Compute improvements
+    hpwl_improvement = (initial_metrics['hpwl'] - generated_metrics['hpwl']) / max(initial_metrics['hpwl'], 1e-6) * 100
+    overlap_improvement = (initial_metrics['overlap'] - generated_metrics['overlap']) / max(initial_metrics['overlap'], 1e-6) * 100 if initial_metrics['overlap'] > 0 else 0
+    boundary_improvement = (initial_metrics['boundary'] - generated_metrics['boundary']) / max(initial_metrics['boundary'], 1e-6) * 100 if initial_metrics['boundary'] > 0 else 0
 
     fig.suptitle(
-        f"Instance {instance_id} - {n_components} Components - "
-        f"Improvement: {improvement:.1f}% (HPWL: {initial_hpwl:.1f} → {generated_hpwl:.1f})",
-        fontsize=16,
+        f"Instance {instance_id} - {n_components} Components\n"
+        f"HPWL: {initial_metrics['hpwl']:.1f} → {generated_metrics['hpwl']:.1f} ({hpwl_improvement:+.1f}%) | "
+        f"Overlap: {initial_metrics['overlap']:.2f} → {generated_metrics['overlap']:.2f} ({overlap_improvement:+.1f}%) | "
+        f"Out-of-Bound: {initial_metrics['boundary']:.2f} → {generated_metrics['boundary']:.2f} ({boundary_improvement:+.1f}%)",
+        fontsize=14,
         fontweight='bold'
     )
 
@@ -171,9 +259,14 @@ def evaluate_instance(trainer, instance_data, instance_id):
     print(f"\nEvaluating instance {instance_id}...")
     print(f"  Components: {n_components}")
 
-    # Compute initial HPWL
+    # Compute initial metrics
     initial_hpwl = compute_hpwl(initial_positions, graph)
+    initial_overlap = compute_overlap_penalty(initial_positions, component_sizes)
+    initial_boundary = compute_boundary_penalty(initial_positions, component_sizes)
+
     print(f"  Initial HPWL: {initial_hpwl:.2f}")
+    print(f"  Initial Overlap: {initial_overlap:.2f}")
+    print(f"  Initial Out-of-Bound: {initial_boundary:.2f}")
 
     # Prepare batch for model inference
     # Create batch dict in the format expected by trainer._prepare_graphs
@@ -211,13 +304,17 @@ def evaluate_instance(trainer, instance_data, instance_id):
         # Take first device, only original components (exclude padding), first basis state
         generated_positions = np.array(X_0[0, :n_components, 0, :])  # [n_components, 2]
 
-        # Compute generated HPWL
+        # Compute generated metrics
         generated_hpwl = compute_hpwl(generated_positions, graph)
+        generated_overlap = compute_overlap_penalty(generated_positions, component_sizes)
+        generated_boundary = compute_boundary_penalty(generated_positions, component_sizes)
 
-        improvement = (initial_hpwl - generated_hpwl) / initial_hpwl * 100
+        hpwl_improvement = (initial_hpwl - generated_hpwl) / initial_hpwl * 100
 
         print(f"  Generated HPWL: {generated_hpwl:.2f}")
-        print(f"  Improvement: {improvement:.1f}%")
+        print(f"  Generated Overlap: {generated_overlap:.2f}")
+        print(f"  Generated Out-of-Bound: {generated_boundary:.2f}")
+        print(f"  HPWL Improvement: {hpwl_improvement:.1f}%")
 
     except Exception as e:
         print(f"  Error during inference: {e}")
@@ -225,17 +322,32 @@ def evaluate_instance(trainer, instance_data, instance_id):
         traceback.print_exc()
         generated_positions = initial_positions
         generated_hpwl = initial_hpwl
-        improvement = 0.0
+        generated_overlap = initial_overlap
+        generated_boundary = initial_boundary
+        hpwl_improvement = 0.0
+
+    # Create metric dictionaries
+    initial_metrics = {
+        'hpwl': initial_hpwl,
+        'overlap': initial_overlap,
+        'boundary': initial_boundary
+    }
+
+    generated_metrics = {
+        'hpwl': generated_hpwl,
+        'overlap': generated_overlap,
+        'boundary': generated_boundary
+    }
 
     result = {
         'instance_id': instance_id,
         'initial_positions': initial_positions,
-        'initial_hpwl': initial_hpwl,
+        'initial_metrics': initial_metrics,
         'generated_positions': generated_positions,
-        'generated_hpwl': generated_hpwl,
+        'generated_metrics': generated_metrics,
         'graph': graph,
         'component_sizes': component_sizes,
-        'improvement': improvement,
+        'hpwl_improvement': hpwl_improvement,
     }
 
     return result
@@ -247,11 +359,16 @@ def print_summary(results):
     print("EVALUATION SUMMARY")
     print("=" * 80)
 
-    initial_hpwls = [r['initial_hpwl'] for r in results]
-    generated_hpwls = [r['generated_hpwl'] for r in results]
-    improvements = [r['improvement'] for r in results]
+    initial_hpwls = [r['initial_metrics']['hpwl'] for r in results]
+    generated_hpwls = [r['generated_metrics']['hpwl'] for r in results]
+    initial_overlaps = [r['initial_metrics']['overlap'] for r in results]
+    generated_overlaps = [r['generated_metrics']['overlap'] for r in results]
+    initial_boundaries = [r['initial_metrics']['boundary'] for r in results]
+    generated_boundaries = [r['generated_metrics']['boundary'] for r in results]
+    hpwl_improvements = [r['hpwl_improvement'] for r in results]
 
     print(f"\nNumber of instances: {len(results)}")
+
     print(f"\nInitial HPWL (random placement):")
     print(f"  Mean: {np.mean(initial_hpwls):.2f}")
     print(f"  Std:  {np.std(initial_hpwls):.2f}")
@@ -264,11 +381,35 @@ def print_summary(results):
     print(f"  Min:  {np.min(generated_hpwls):.2f}")
     print(f"  Max:  {np.max(generated_hpwls):.2f}")
 
-    print(f"\nImprovement:")
-    print(f"  Mean: {np.mean(improvements):.1f}%")
-    print(f"  Std:  {np.std(improvements):.1f}%")
-    print(f"  Min:  {np.min(improvements):.1f}%")
-    print(f"  Max:  {np.max(improvements):.1f}%")
+    print(f"\nHPWL Improvement:")
+    print(f"  Mean: {np.mean(hpwl_improvements):.1f}%")
+    print(f"  Std:  {np.std(hpwl_improvements):.1f}%")
+    print(f"  Min:  {np.min(hpwl_improvements):.1f}%")
+    print(f"  Max:  {np.max(hpwl_improvements):.1f}%")
+
+    print(f"\nInitial Overlap (random placement):")
+    print(f"  Mean: {np.mean(initial_overlaps):.2f}")
+    print(f"  Std:  {np.std(initial_overlaps):.2f}")
+    print(f"  Min:  {np.min(initial_overlaps):.2f}")
+    print(f"  Max:  {np.max(initial_overlaps):.2f}")
+
+    print(f"\nGenerated Overlap (trained model):")
+    print(f"  Mean: {np.mean(generated_overlaps):.2f}")
+    print(f"  Std:  {np.std(generated_overlaps):.2f}")
+    print(f"  Min:  {np.min(generated_overlaps):.2f}")
+    print(f"  Max:  {np.max(generated_overlaps):.2f}")
+
+    print(f"\nInitial Out-of-Bound (random placement):")
+    print(f"  Mean: {np.mean(initial_boundaries):.2f}")
+    print(f"  Std:  {np.std(initial_boundaries):.2f}")
+    print(f"  Min:  {np.min(initial_boundaries):.2f}")
+    print(f"  Max:  {np.max(initial_boundaries):.2f}")
+
+    print(f"\nGenerated Out-of-Bound (trained model):")
+    print(f"  Mean: {np.mean(generated_boundaries):.2f}")
+    print(f"  Std:  {np.std(generated_boundaries):.2f}")
+    print(f"  Min:  {np.min(generated_boundaries):.2f}")
+    print(f"  Max:  {np.max(generated_boundaries):.2f}")
 
     print("\n" + "=" * 80)
 
@@ -327,8 +468,8 @@ def main():
             result['generated_positions'],
             result['graph'],
             result['component_sizes'],
-            result['initial_hpwl'],
-            result['generated_hpwl'],
+            result['initial_metrics'],
+            result['generated_metrics'],
             i,
             save_path=save_path
         )

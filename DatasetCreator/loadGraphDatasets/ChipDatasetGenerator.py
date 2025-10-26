@@ -160,8 +160,11 @@ class ChipDatasetGenerator(BaseDatasetGenerator):
             initial_positions, placed_sizes
         )
 
-        # 5. THIRD: Randomize placement (shuffle positions but keep legality)
-        randomized_positions = self._randomize_placement(placed_sizes)
+        # 5. THIRD: Randomize placement with completely NEW random positions
+        # Generate uniform random positions within canvas bounds [-1, 1]
+        # No legality constraint needed - overlaps are okay for random starting point
+        # This destroys all spatial relationships from the legal placement
+        randomized_positions = torch.rand(len(placed_sizes), 2) * 2 - 1  # Uniform in [-1, 1]
 
         # 6. Compute HPWL (will be high because placement is randomized!)
         hpwl = self._compute_hpwl(randomized_positions, placed_sizes, edge_index, edge_attr)
