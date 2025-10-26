@@ -246,7 +246,7 @@ def is_position_legal(pos, size, placed_positions, canvas_bounds=[-1, 1]):
 
 
 def find_closest_legal_position(target_position, component_size, placed_positions,
-                                canvas_bounds=[-1, 1], max_search_radius=4.0):
+                                canvas_bounds=[-1, 1], max_search_radius=10.0):
     """
     Spiral search from target position to find closest legal position.
 
@@ -266,7 +266,7 @@ def find_closest_legal_position(target_position, component_size, placed_position
 
     # Spiral search parameters
     min_step = min(component_size) / 4  # Fine-grained search
-    num_angles = 16  # Number of angles to try at each radius
+    num_angles = 24  # Increased number of angles for better coverage
 
     # Spiral outward
     for radius in np.arange(min_step, max_search_radius, min_step):
@@ -278,24 +278,35 @@ def find_closest_legal_position(target_position, component_size, placed_position
             if is_position_legal(candidate, component_size, placed_positions, canvas_bounds):
                 return candidate
 
-    # Fallback: If no legal position found in spiral, try random positions
-    # This should rarely happen
-    print(f"Warning: Could not find legal position within radius {max_search_radius}, trying fallback")
-
+    # Fallback: Exhaustive grid search over entire canvas
+    # This finds the closest legal position anywhere on the canvas
     canvas_min, canvas_max = canvas_bounds[0], canvas_bounds[1]
     width, height = component_size
 
-    for _ in range(1000):
-        # Random position within valid range
-        x = np.random.uniform(canvas_min + width/2, canvas_max - width/2)
-        y = np.random.uniform(canvas_min + height/2, canvas_max - height/2)
-        candidate = np.array([x, y])
+    # Grid search with fine granularity
+    grid_step = min(component_size) / 2
 
-        if is_position_legal(candidate, component_size, placed_positions, canvas_bounds):
-            return candidate
+    best_candidate = None
+    best_distance = float('inf')
+
+    x_range = np.arange(canvas_min + width/2, canvas_max - width/2 + grid_step/2, grid_step)
+    y_range = np.arange(canvas_min + height/2, canvas_max - height/2 + grid_step/2, grid_step)
+
+    for x in x_range:
+        for y in y_range:
+            candidate = np.array([x, y])
+
+            if is_position_legal(candidate, component_size, placed_positions, canvas_bounds):
+                distance = np.linalg.norm(candidate - target_position)
+                if distance < best_distance:
+                    best_distance = distance
+                    best_candidate = candidate
+
+    if best_candidate is not None:
+        return best_candidate
 
     # Last resort: return target position even if illegal
-    print(f"Warning: Could not find any legal position, returning target")
+    # This should almost never happen
     return target_position
 
 
@@ -304,7 +315,7 @@ def greedy_legalize(positions, component_sizes, graph, canvas_bounds=[-1, 1]):
     Parameter-free greedy decoder to legalize a placement.
 
     Algorithm:
-    1. Order components by netlist degree (more connected = higher priority)
+    1. Order components by area (larger first) then netlist degree (common bin-packing heuristic)
     2. Greedily place each component at closest legal position to its target
 
     Args:
@@ -318,9 +329,14 @@ def greedy_legalize(positions, component_sizes, graph, canvas_bounds=[-1, 1]):
     """
     n_components = len(positions)
 
-    # Step 1: Order components by netlist degree (parameter-free!)
+    # Step 1: Order components (parameter-free!)
+    # Primary: Area (larger first - prevents fragmentation)
+    # Secondary: Netlist degree (more connected first)
+    areas = component_sizes[:, 0] * component_sizes[:, 1]
     degrees = compute_netlist_degrees(graph)
-    component_order = np.argsort(degrees)[::-1]  # High to low
+
+    # Lexicographic sort: (area descending, degree descending)
+    component_order = np.lexsort((-degrees, -areas))
 
     # Step 2: Greedy placement
     placed_positions = {}  # {component_id: (pos, size)}
@@ -343,6 +359,103 @@ def greedy_legalize(positions, component_sizes, graph, canvas_bounds=[-1, 1]):
         legal_positions_list[comp_i] = legal_pos
 
     return np.array(legal_positions_list)
+
+
+def minimal_disruption_legalize(positions, component_sizes, graph, canvas_bounds=[-1, 1]):
+    """
+    Alternative legalization: Only move violating components.
+
+    This preserves the model's spatial relationships better than full greedy placement.
+
+    Algorithm:
+    1. Identify components that are violating constraints (overlap or out-of-bounds)
+    2. Order violating components by degree
+    3. Move only violating components to nearest legal positions
+    4. Keep non-violating components in place
+
+    Args:
+        positions: [n_components, 2] - May have overlaps/out-of-bounds
+        component_sizes: [n_components, 2]
+        graph: jraph.GraphsTuple (netlist)
+        canvas_bounds: [min, max]
+
+    Returns:
+        legal_positions: [n_components, 2] - Legalized placement
+    """
+    n_components = len(positions)
+    legal_positions = positions.copy()
+
+    # Step 1: Place all components initially
+    placed_positions = {}
+    for i in range(n_components):
+        placed_positions[i] = (positions[i], component_sizes[i])
+
+    # Step 2: Identify violating components
+    violating = set()
+
+    # Check out-of-bounds
+    for i in range(n_components):
+        pos = positions[i]
+        size = component_sizes[i]
+        x_min, y_min = pos - size/2
+        x_max, y_max = pos + size/2
+
+        if (x_min < canvas_bounds[0] or x_max > canvas_bounds[1] or
+            y_min < canvas_bounds[0] or y_max > canvas_bounds[1]):
+            violating.add(i)
+
+    # Check overlaps
+    for i in range(n_components):
+        if i in violating:
+            continue
+        for j in range(i+1, n_components):
+            pos_i, size_i = positions[i], component_sizes[i]
+            pos_j, size_j = positions[j], component_sizes[j]
+
+            # Check overlap
+            x_min_i, y_min_i = pos_i - size_i/2
+            x_max_i, y_max_i = pos_i + size_i/2
+            x_min_j, y_min_j = pos_j - size_j/2
+            x_max_j, y_max_j = pos_j + size_j/2
+
+            overlap_width = max(0.0, min(x_max_i, x_max_j) - max(x_min_i, x_min_j))
+            overlap_height = max(0.0, min(y_max_i, y_max_j) - max(y_min_i, y_min_j))
+
+            if overlap_width > 1e-6 and overlap_height > 1e-6:
+                violating.add(i)
+                violating.add(j)
+
+    print(f"    {len(violating)}/{n_components} components violating constraints")
+
+    if len(violating) == 0:
+        return legal_positions  # Already legal!
+
+    # Step 3: Order violating components by degree (more connected first)
+    degrees = compute_netlist_degrees(graph)
+    violating_list = sorted(list(violating), key=lambda i: degrees[i], reverse=True)
+
+    # Step 4: Remove violating components from placed_positions
+    for i in violating:
+        del placed_positions[i]
+
+    # Step 5: Re-place violating components
+    for comp_i in violating_list:
+        target = positions[comp_i]
+        size = component_sizes[comp_i]
+
+        # Find closest legal position
+        legal_pos = find_closest_legal_position(
+            target_position=target,
+            component_size=size,
+            placed_positions=placed_positions,
+            canvas_bounds=canvas_bounds
+        )
+
+        # Update
+        placed_positions[comp_i] = (legal_pos, size)
+        legal_positions[comp_i] = legal_pos
+
+    return legal_positions
 
 
 def visualize_comparison(legal_pos, initial_pos, generated_pos, graph, component_sizes,
@@ -548,9 +661,9 @@ def evaluate_instance(trainer, instance_data, instance_id):
         print(f"  Raw Model Overlap: {raw_overlap:.2f}")
         print(f"  Raw Model Out-of-Bound: {raw_boundary:.2f}")
 
-        # Step 2: Apply greedy legalization decoder (parameter-free!)
-        print(f"  Applying greedy legalization decoder...")
-        legalized_positions = greedy_legalize(best_sample, component_sizes, graph)
+        # Step 2: Apply minimal disruption legalization decoder (parameter-free!)
+        print(f"  Applying minimal disruption legalization decoder...")
+        legalized_positions = minimal_disruption_legalize(best_sample, component_sizes, graph)
 
         # Compute legalized metrics (should be legal!)
         generated_positions = legalized_positions
