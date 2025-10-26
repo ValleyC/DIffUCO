@@ -541,13 +541,25 @@ class PPO(Base):
         rewards = log_dict["RL"]["rewards"]
         reduced_rewards = rewards[:,:,:-1]
 
-        # EXPERIMENTAL: For continuous problems, skip reward normalization
-        # to preserve penalty weight magnitudes
+        # EXPERIMENTAL: For continuous problems, use reward scaling instead of normalization
+        # to preserve penalty weight magnitudes while preventing gradient explosions
         if self.config.get("continuous_dim", 0) > 0:
-            # No reward normalization for continuous problems
-            normed_rewards = rewards
-            mov_average_reward = jnp.mean(reduced_rewards)
-            mov_std_reward = jnp.std(reduced_rewards)
+            # Scale rewards to keep magnitudes reasonable for PPO
+            # Default scale 0.01: energy of -1000 becomes -10 (manageable)
+            # This preserves relative importance: overlap_weight=100 is still 100× worse than HPWL=1
+            reward_scale = self.config.get("reward_scale", 0.01)
+            normed_rewards = rewards * reward_scale
+            mov_average_reward = jnp.mean(reduced_rewards) * reward_scale
+            mov_std_reward = jnp.std(reduced_rewards) * reward_scale
+
+            # Log the scaling for monitoring (only once)
+            if not hasattr(self, '_reward_scale_logged'):
+                print(f"\n=== Continuous Problem: Using Reward Scaling ===")
+                print(f"  reward_scale = {reward_scale}")
+                print(f"  Example: energy=-1000 → reward={-1000 * reward_scale}")
+                print(f"  Preserves weight ratios while preventing gradient explosions")
+                print(f"===================================================\n")
+                self._reward_scale_logged = True
         else:
             # Original reward normalization for discrete problems
             mov_average_reward, mov_std_reward =  self.MovingAverageClass.update_mov_averages(reduced_rewards)
@@ -567,14 +579,14 @@ class PPO(Base):
 
     @partial(jax.jit, static_argnums=(0,))
     def _normalize_advantages(self, advantages):
-        # EXPERIMENTAL: Disable advantage normalization for continuous problems
-        # Normalization destroys the absolute scale of penalties, making
-        # overlap_weight=10 and overlap_weight=2000 look similar after normalization
-        # For chip placement with large penalty weights, we need to preserve magnitude
+        # EXPERIMENTAL: For continuous problems, use mild centering without std division
+        # This prevents extreme outliers while preserving relative magnitudes
         if self.config.get("continuous_dim", 0) > 0:
-            # For continuous problems (chip placement): NO normalization
-            # Keep raw advantages to preserve penalty weight information
-            return advantages
+            # For continuous problems: center at mean but DON'T divide by std
+            # This preserves penalty weight information better than full normalization
+            unpadded_adv = advantages[:,:,:-1]
+            centered_advantages = advantages - jnp.mean(unpadded_adv)
+            return centered_advantages
         else:
             # For discrete problems (TSP, MaxCut, etc.): Original normalization
             unpadded_adv = advantages[:,:,:-1]
