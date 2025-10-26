@@ -458,6 +458,109 @@ def minimal_disruption_legalize(positions, component_sizes, graph, canvas_bounds
     return legal_positions
 
 
+def iterative_push_apart_legalize(positions, component_sizes, canvas_bounds=[-1, 1],
+                                   max_iterations=100, overlap_threshold=1e-6):
+    """
+    Iterative "push apart" legalization that minimally adjusts positions.
+
+    This preserves the model's learned spatial structure while eliminating overlaps.
+
+    Algorithm:
+    1. Start with model's predicted positions
+    2. Detect overlapping pairs
+    3. Push overlapping components apart by minimum distance
+    4. Handle boundary violations by nudging components back in
+    5. Repeat until no violations (or max iterations)
+
+    Args:
+        positions: [n_components, 2] - Model predictions
+        component_sizes: [n_components, 2]
+        canvas_bounds: [min, max]
+        max_iterations: Maximum number of refinement iterations
+        overlap_threshold: Minimum overlap to consider
+
+    Returns:
+        legal_positions: [n_components, 2] - Minimally adjusted legal positions
+    """
+    n_components = len(positions)
+    legal_positions = positions.copy()
+
+    canvas_min, canvas_max = canvas_bounds[0], canvas_bounds[1]
+
+    for iteration in range(max_iterations):
+        moved = False
+
+        # Step 1: Handle boundary violations (push back in bounds)
+        for i in range(n_components):
+            pos = legal_positions[i]
+            size = component_sizes[i]
+
+            # Check boundaries
+            x_min_required = canvas_min + size[0]/2
+            x_max_required = canvas_max - size[0]/2
+            y_min_required = canvas_min + size[1]/2
+            y_max_required = canvas_max - size[1]/2
+
+            # Clamp position to valid range
+            new_x = np.clip(pos[0], x_min_required, x_max_required)
+            new_y = np.clip(pos[1], y_min_required, y_max_required)
+
+            if new_x != pos[0] or new_y != pos[1]:
+                legal_positions[i] = np.array([new_x, new_y])
+                moved = True
+
+        # Step 2: Detect and resolve overlaps
+        for i in range(n_components):
+            for j in range(i+1, n_components):
+                pos_i, size_i = legal_positions[i], component_sizes[i]
+                pos_j, size_j = legal_positions[j], component_sizes[j]
+
+                # Compute bounding boxes
+                x_min_i, y_min_i = pos_i - size_i/2
+                x_max_i, y_max_i = pos_i + size_i/2
+                x_min_j, y_min_j = pos_j - size_j/2
+                x_max_j, y_max_j = pos_j + size_j/2
+
+                # Check overlap
+                overlap_x = max(0.0, min(x_max_i, x_max_j) - max(x_min_i, x_min_j))
+                overlap_y = max(0.0, min(y_max_i, y_max_j) - max(y_min_i, y_min_j))
+
+                if overlap_x > overlap_threshold and overlap_y > overlap_threshold:
+                    # Components overlap - push them apart
+
+                    # Compute direction to push (from center to center)
+                    direction = pos_j - pos_i
+                    distance = np.linalg.norm(direction)
+
+                    if distance < 1e-9:
+                        # Components exactly on top of each other - push in random direction
+                        direction = np.random.randn(2)
+                        distance = np.linalg.norm(direction)
+
+                    direction = direction / distance  # Normalize
+
+                    # Required separation distance (sum of half-sizes in push direction)
+                    # Use minimum of overlap dimensions to determine push amount
+                    push_amount = (min(overlap_x, overlap_y) / 2.0) + 0.01  # Small margin
+
+                    # Push both components apart (equal force)
+                    legal_positions[i] -= direction * push_amount / 2
+                    legal_positions[j] += direction * push_amount / 2
+
+                    moved = True
+
+        # Check convergence
+        if not moved:
+            break
+
+    if iteration == max_iterations - 1:
+        print(f"    Warning: Push-apart reached max iterations ({max_iterations})")
+    else:
+        print(f"    Push-apart converged in {iteration+1} iterations")
+
+    return legal_positions
+
+
 def visualize_comparison(legal_pos, initial_pos, generated_pos, graph, component_sizes,
                          legal_metrics, initial_metrics, generated_metrics, instance_id, save_path=None):
     """
@@ -661,9 +764,9 @@ def evaluate_instance(trainer, instance_data, instance_id):
         print(f"  Raw Model Overlap: {raw_overlap:.2f}")
         print(f"  Raw Model Out-of-Bound: {raw_boundary:.2f}")
 
-        # Step 2: Apply minimal disruption legalization decoder (parameter-free!)
-        print(f"  Applying minimal disruption legalization decoder...")
-        legalized_positions = minimal_disruption_legalize(best_sample, component_sizes, graph)
+        # Step 2: Apply iterative push-apart legalization decoder (parameter-free!)
+        print(f"  Applying iterative push-apart decoder...")
+        legalized_positions = iterative_push_apart_legalize(best_sample, component_sizes)
 
         # Compute legalized metrics (should be legal!)
         generated_positions = legalized_positions
