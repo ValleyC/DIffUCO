@@ -9,12 +9,19 @@ class ChipPlacementEnergyClass(BaseEnergyClass):
     """
     Energy function for chip placement problems.
 
-    Energy = HPWL + overlap_weight * overlap_penalty + boundary_weight * boundary_penalty
+    Energy = HPWL + overlap_weight * normalized_overlap + boundary_weight * normalized_boundary
 
     Where:
     - HPWL (Half-Perimeter Wirelength): sum of bounding box dimensions for all nets
-    - Overlap penalty: sum of overlap areas between components
-    - Boundary penalty: sum of out-of-bounds areas
+    - normalized_overlap: overlap_area * HPWL (scales proportionally with circuit size)
+    - normalized_boundary: boundary_area * HPWL (scales proportionally with circuit size)
+
+    The normalization ensures that overlap_weight and boundary_weight represent
+    "how many times HPWL when violation=1.0" rather than absolute penalty values.
+    This makes penalties scale naturally with circuit size.
+
+    For example, overlap_weight=5.0 means: when overlap_area=1.0, penalty = 5.0 * HPWL.
+    This ensures the same weight values work across different circuit sizes (50 vs 400 components).
 
     This replaces MaxCutEnergyClass for continuous chip placement optimization.
     """
@@ -40,8 +47,9 @@ class ChipPlacementEnergyClass(BaseEnergyClass):
 
         print("ChipPlacementEnergy initialized")
         print(f"  Continuous dim: {self.continuous_dim}")
-        print(f"  Overlap weight: {self.overlap_weight}")
-        print(f"  Boundary weight: {self.boundary_weight}")
+        print(f"  Overlap weight: {self.overlap_weight} (normalized by HPWL scale)")
+        print(f"  Boundary weight: {self.boundary_weight} (normalized by HPWL scale)")
+        print(f"  Note: Weights represent 'X times more important than HPWL'")
         print(f"  Canvas: [{self.canvas_x_min}, {self.canvas_x_min + self.canvas_width}] x [{self.canvas_y_min}, {self.canvas_y_min + self.canvas_height}]")
         print("______________")
 
@@ -102,11 +110,20 @@ class ChipPlacementEnergyClass(BaseEnergyClass):
             positions, component_sizes, node_gr_idx, n_graph
         )
 
-        # Total energy
+        # Total energy with HPWL-normalized penalties
+        # Scale penalties by HPWL so that weights represent "how many times HPWL"
+        # when the violation is at unit scale (1.0).
+        # This makes penalties scale naturally with circuit size.
+
+        # For overlap_weight=5.0: when overlap=1.0, penalty = 5.0 * HPWL
+        # This ensures the same weight values work across different circuit sizes.
+        normalized_overlap_penalty = overlap_per_graph * hpwl_per_graph
+        normalized_boundary_penalty = boundary_per_graph * hpwl_per_graph
+
         Energy_per_graph = (
             hpwl_per_graph +
-            self.overlap_weight * overlap_per_graph +
-            self.boundary_weight * boundary_per_graph
+            self.overlap_weight * normalized_overlap_penalty +
+            self.boundary_weight * normalized_boundary_penalty
         )
 
         # Constraint violations (for monitoring)
