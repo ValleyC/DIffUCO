@@ -215,8 +215,9 @@ class ChipDatasetGenerator(BaseDatasetGenerator):
 
         # Parse dataset name to determine scale
         if "v1" in self.dataset_name.lower():
-            # ChipDiffusion v1: 230 components, Clipped Exponential size distribution
-            max_instance = 230
+            # ChipDiffusion v1: 400 component pool, ~230 placed on average
+            # Uses Clipped Exponential size distribution
+            max_instance = 400
             use_exponential = True
             exp_scale = 0.08
             exp_min = 0.02
