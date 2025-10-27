@@ -458,29 +458,105 @@ def minimal_disruption_legalize(positions, component_sizes, graph, canvas_bounds
     return legal_positions
 
 
-def iterative_push_apart_legalize(positions, component_sizes, graph=None, canvas_bounds=[-1, 1],
+class SpatialGrid:
+    """
+    Spatial grid for efficient collision detection.
+
+    Reduces overlap checking from O(n²) to O(n×c) where c is average neighbors.
+    """
+    def __init__(self, positions, component_sizes, canvas_bounds, cell_size=None):
+        """
+        Args:
+            positions: [n, 2] component positions
+            component_sizes: [n, 2] component sizes
+            canvas_bounds: [min, max]
+            cell_size: Grid cell size (auto if None)
+        """
+        self.canvas_min = canvas_bounds[0]
+        self.canvas_max = canvas_bounds[1]
+
+        # Auto-determine cell size: 2x the largest component dimension
+        if cell_size is None:
+            max_component_size = np.max(component_sizes)
+            self.cell_size = max(max_component_size * 2, 0.1)
+        else:
+            self.cell_size = cell_size
+
+        # Build grid
+        self.grid = {}  # {(grid_x, grid_y): [component_indices]}
+        self.positions = positions
+        self.component_sizes = component_sizes
+
+        for i in range(len(positions)):
+            cell = self._get_cell(positions[i])
+            if cell not in self.grid:
+                self.grid[cell] = []
+            self.grid[cell].append(i)
+
+    def _get_cell(self, pos):
+        """Get grid cell (ix, iy) for position"""
+        ix = int((pos[0] - self.canvas_min) / self.cell_size)
+        iy = int((pos[1] - self.canvas_min) / self.cell_size)
+        return (ix, iy)
+
+    def get_nearby_components(self, component_id):
+        """
+        Get components in same and adjacent cells (9 cells total).
+
+        Returns:
+            List of component indices that could potentially overlap
+        """
+        pos = self.positions[component_id]
+        cell_x, cell_y = self._get_cell(pos)
+
+        nearby = []
+        # Check 3x3 grid around component
+        for dx in [-1, 0, 1]:
+            for dy in [-1, 0, 1]:
+                neighbor_cell = (cell_x + dx, cell_y + dy)
+                if neighbor_cell in self.grid:
+                    for j in self.grid[neighbor_cell]:
+                        if j != component_id and j > component_id:  # Only check each pair once
+                            nearby.append(j)
+
+        return nearby
+
+    def update_position(self, component_id, new_pos):
+        """Update component position in grid"""
+        old_cell = self._get_cell(self.positions[component_id])
+        new_cell = self._get_cell(new_pos)
+
+        if old_cell != new_cell:
+            # Remove from old cell
+            self.grid[old_cell].remove(component_id)
+            if not self.grid[old_cell]:
+                del self.grid[old_cell]
+
+            # Add to new cell
+            if new_cell not in self.grid:
+                self.grid[new_cell] = []
+            self.grid[new_cell].append(component_id)
+
+        self.positions[component_id] = new_pos
+
+
+def iterative_push_apart_legalize(positions, component_sizes, canvas_bounds=[-1, 1],
                                    max_iterations=100, overlap_threshold=1e-6):
     """
     Iterative "push apart" legalization that minimally adjusts positions.
 
     This preserves the model's learned spatial structure while eliminating overlaps.
 
-    NETLIST-AWARE: Connected components are pushed apart less to preserve HPWL.
-
     Algorithm:
     1. Start with model's predicted positions
-    2. Build netlist connectivity lookup
-    3. Detect overlapping pairs
-    4. Push overlapping components apart by minimum distance
-       - Connected components: push less (preserve HPWL)
-       - Unconnected components: push more (no penalty)
-    5. Handle boundary violations by nudging components back in
-    6. Repeat until no violations (or max iterations)
+    2. Detect overlapping pairs
+    3. Push overlapping components apart by minimum distance
+    4. Handle boundary violations by nudging components back in
+    5. Repeat until no violations (or max iterations)
 
     Args:
         positions: [n_components, 2] - Model predictions
         component_sizes: [n_components, 2]
-        graph: jraph.GraphsTuple - Netlist (optional, for netlist-aware pushing)
         canvas_bounds: [min, max]
         max_iterations: Maximum number of refinement iterations
         overlap_threshold: Minimum overlap to consider
@@ -493,14 +569,9 @@ def iterative_push_apart_legalize(positions, component_sizes, graph=None, canvas
 
     canvas_min, canvas_max = canvas_bounds[0], canvas_bounds[1]
 
-    # Build netlist connectivity lookup (parameter-free!)
-    connected_pairs = set()
-    if graph is not None:
-        for sender, receiver in zip(graph.senders, graph.receivers):
-            i, j = int(sender), int(receiver)
-            # Store both directions for easy lookup
-            connected_pairs.add((min(i, j), max(i, j)))
-        print(f"    Netlist has {len(connected_pairs)} connected pairs")
+    # Build spatial grid for efficient collision detection (O(n×c) instead of O(n²))
+    spatial_grid = SpatialGrid(legal_positions.copy(), component_sizes, canvas_bounds)
+    print(f"    Spatial grid: {len(spatial_grid.grid)} cells, cell_size={spatial_grid.cell_size:.3f}")
 
     for iteration in range(max_iterations):
         moved = False
@@ -521,12 +592,17 @@ def iterative_push_apart_legalize(positions, component_sizes, graph=None, canvas
             new_y = np.clip(pos[1], y_min_required, y_max_required)
 
             if new_x != pos[0] or new_y != pos[1]:
-                legal_positions[i] = np.array([new_x, new_y])
+                new_pos = np.array([new_x, new_y])
+                legal_positions[i] = new_pos
+                spatial_grid.update_position(i, new_pos)
                 moved = True
 
-        # Step 2: Detect and resolve overlaps
+        # Step 2: Detect and resolve overlaps (OPTIMIZED: O(n×c) instead of O(n²))
         for i in range(n_components):
-            for j in range(i+1, n_components):
+            # Only check nearby components (spatial grid optimization)
+            nearby_components = spatial_grid.get_nearby_components(i)
+
+            for j in nearby_components:
                 pos_i, size_i = legal_positions[i], component_sizes[i]
                 pos_j, size_j = legal_positions[j], component_sizes[j]
 
@@ -556,24 +632,18 @@ def iterative_push_apart_legalize(positions, component_sizes, graph=None, canvas
 
                     # Required separation distance (sum of half-sizes in push direction)
                     # Use minimum of overlap dimensions to determine push amount
-                    base_push_amount = (min(overlap_x, overlap_y) / 2.0) + 0.01  # Small margin
-
-                    # NETLIST-AWARE: Adjust push amount based on connectivity (parameter-free!)
-                    pair_key = (min(i, j), max(i, j))
-                    if pair_key in connected_pairs:
-                        # Connected in netlist - push less to preserve HPWL
-                        # Model wants them close, so minimal separation
-                        push_multiplier = 0.6  # Push only 60% of normal amount
-                    else:
-                        # Not connected - push more aggressively
-                        # No penalty for separating them
-                        push_multiplier = 1.2  # Push 120% to ensure separation
-
-                    push_amount = base_push_amount * push_multiplier
+                    push_amount = (min(overlap_x, overlap_y) / 2.0) + 0.01  # Small margin
 
                     # Push both components apart (equal force)
-                    legal_positions[i] -= direction * push_amount / 2
-                    legal_positions[j] += direction * push_amount / 2
+                    new_pos_i = legal_positions[i] - direction * push_amount / 2
+                    new_pos_j = legal_positions[j] + direction * push_amount / 2
+
+                    legal_positions[i] = new_pos_i
+                    legal_positions[j] = new_pos_j
+
+                    # Update spatial grid
+                    spatial_grid.update_position(i, new_pos_i)
+                    spatial_grid.update_position(j, new_pos_j)
 
                     moved = True
 
@@ -792,9 +862,9 @@ def evaluate_instance(trainer, instance_data, instance_id):
         print(f"  Raw Model Overlap: {raw_overlap:.2f}")
         print(f"  Raw Model Out-of-Bound: {raw_boundary:.2f}")
 
-        # Step 2: Apply netlist-aware iterative push-apart decoder (parameter-free!)
-        print(f"  Applying netlist-aware push-apart decoder...")
-        legalized_positions = iterative_push_apart_legalize(best_sample, component_sizes, graph)
+        # Step 2: Apply iterative push-apart legalization decoder (parameter-free!)
+        print(f"  Applying iterative push-apart decoder...")
+        legalized_positions = iterative_push_apart_legalize(best_sample, component_sizes)
 
         # Compute legalized metrics (should be legal!)
         generated_positions = legalized_positions
