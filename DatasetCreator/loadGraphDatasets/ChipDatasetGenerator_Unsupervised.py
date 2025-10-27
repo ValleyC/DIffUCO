@@ -214,30 +214,56 @@ class ChipDatasetGenerator(BaseDatasetGenerator):
         # For ~30-50 components with tiny sizes: max_instance=120, long_sizes=[0.1, 0.35]
 
         # Parse dataset name to determine scale
-        if "small" in self.dataset_name.lower():
+        if "v1" in self.dataset_name.lower():
+            # ChipDiffusion v1: 230 components, Clipped Exponential size distribution
+            max_instance = 230
+            use_exponential = True
+            exp_scale = 0.08
+            exp_min = 0.02
+            exp_max = 1.0
+            aspect_ratio_range = (0.25, 1.0)
+        elif "small" in self.dataset_name.lower():
             # Small: ~8-12 components, larger sizes
             max_instance = 25
             long_size_range = (0.4, 0.75)
+            use_exponential = False
+            aspect_ratio_range = (0.4, 1.0)
         elif "medium" in self.dataset_name.lower() or "20" in self.dataset_name:
             # Medium: ~15-25 components, medium sizes
             max_instance = 60
             long_size_range = (0.2, 0.5)
+            use_exponential = False
+            aspect_ratio_range = (0.4, 1.0)
         elif "large" in self.dataset_name.lower() or "50" in self.dataset_name:
             # Large: ~30-50 components, small sizes
             max_instance = 120
             long_size_range = (0.1, 0.35)
+            use_exponential = False
+            aspect_ratio_range = (0.4, 1.0)
         elif "huge" in self.dataset_name.lower() or "100" in self.dataset_name:
             # Huge: ~60-100 components, tiny sizes
             max_instance = 250
             long_size_range = (0.08, 0.25)
+            use_exponential = False
+            aspect_ratio_range = (0.4, 1.0)
         else:
             # Default: small
             max_instance = 25
             long_size_range = (0.4, 0.75)
+            use_exponential = False
+            aspect_ratio_range = (0.4, 1.0)
 
-        aspect_ratios = self._sample_uniform(0.4, 1.0, (max_instance,))  # More square-ish
-        # Use UNIFORM distribution for consistently sized components
-        long_sizes = self._sample_uniform(long_size_range[0], long_size_range[1], (max_instance,))
+        # Sample aspect ratios
+        aspect_ratios = self._sample_uniform(aspect_ratio_range[0], aspect_ratio_range[1], (max_instance,))
+
+        # Sample component sizes: Exponential for v1, Uniform for others
+        if use_exponential:
+            # ChipDiffusion v1: Clipped Exponential distribution
+            long_sizes = self._sample_clipped_exp(exp_scale, exp_min, exp_max, (max_instance,))
+        else:
+            # Original: UNIFORM distribution for consistently sized components
+            long_sizes = self._sample_uniform(long_size_range[0], long_size_range[1], (max_instance,))
+
         short_sizes = aspect_ratios * long_sizes
 
         # Random orientation
