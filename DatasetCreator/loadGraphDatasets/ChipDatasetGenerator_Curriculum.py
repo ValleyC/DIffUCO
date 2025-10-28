@@ -218,19 +218,25 @@ class ChipDatasetGeneratorCurriculum(BaseGenerator):
         placement = ChipPlacement()
         density = 0.0
 
-        # Sort by area (SMALLEST first for better packing!)
-        # Rationale: Place small components first → easier to fit remaining space
+        # Sort by area (LARGEST first to ensure proper density!)
+        # Rationale:
+        # - Large components contribute most to density
+        # - If we place small ones first, we hit component count before density target
+        # - Need to fill canvas with large pieces first, then pack small ones
         areas = x_sizes * y_sizes
-        _, indices = torch.sort(areas, descending=False)  # Changed from True!
+        _, indices = torch.sort(areas, descending=True)  # LARGEST first!
         x_sizes_sorted = x_sizes[indices]
         y_sizes_sorted = y_sizes[indices]
 
         placed_components = []
 
-        # Tight bounds around specific target (±3 components tolerance)
-        # target_count is already sampled from [90, 110], so don't add more variance!
-        min_components = max(10, target_count - 3)
-        max_components = target_count + 3
+        # Relaxed bounds: allow some flexibility to reach density target
+        # Priority order:
+        # 1. Reach minimum component count
+        # 2. Reach density target
+        # 3. Try to stay close to target_count (but density is more important!)
+        min_components = max(10, target_count - 5)
+        max_components = target_count + 10  # Allow up to +10 to reach density
 
         for idx, (x_size, y_size) in enumerate(zip(x_sizes_sorted, y_sizes_sorted)):
             x_size_val = float(x_size)
@@ -263,24 +269,25 @@ class ChipDatasetGeneratorCurriculum(BaseGenerator):
 
             num_placed = len(placed_components)
 
-            # STOPPING CRITERIA (prioritize component count over density)
+            # STOPPING CRITERIA (prioritize DENSITY over exact component count)
+            # We want circuits with proper density (0.75-0.9) more than exact count
+            #
             # Stop if:
-            # 1. Safety: exceeded max count
-            # 2. Success: in target range AND reached minimum density (70% of target)
-            # 3. Fallback: reached density target (even if fewer components)
+            # 1. Minimum reached: Have min_components AND density >= target
+            # 2. Good enough: In component range AND density >= 90% of target
+            # 3. Safety: Exceeded max_components (but this shouldn't happen often)
 
-            if num_placed >= max_components:
-                # Safety: don't exceed max
+            if num_placed >= min_components and density >= stop_density:
+                # Success! We have enough components and proper density
                 break
 
             if min_components <= num_placed <= max_components:
-                # In target range - check if density is acceptable
-                if density >= stop_density * 0.7:  # Allow 70% of target density
+                # In component range - check if density is close enough
+                if density >= stop_density * 0.9:  # Within 10% of density target
                     break
 
-            # Fallback: if we've reached density target, stop
-            # (even if we have fewer components than min)
-            if density >= stop_density:
+            if num_placed >= max_components:
+                # Safety: don't exceed max (even if density low)
                 break
 
         # Extract placement data
