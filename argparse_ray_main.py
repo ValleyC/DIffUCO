@@ -9,7 +9,7 @@ parser.add_argument('--multi_gpu', action='store_true', help='wheter to use mult
 parser.add_argument('--mode', default='Diffusion', choices = ["Diffusion"], help='Define the Approach')
 parser.add_argument('--EnergyFunction', default='MIS', choices = ["MaxCut", "MIS", "MVC", "MaxCl", "WMIS", "MDS", "MaxClv2", "TSP", "IsingModel", "SpinGlass", "SpinGlass", "ChipPlacement"], help='Define the EnergyFunction of the IsingModel')
 parser.add_argument('--IsingMode', default='RB_iid_100', choices = ["Gset","BA_large","RB_iid_small", "RB_iid_dummy", "BA_dummy", "RB_iid_large" ,"RRG_200_k_=all", "BA_small","TSP_random_100",
-                                                                    "TSP_random_20", "COLLAB", "IMDB-BINARY", "RB_iid_100_dummy" , "RB_iid_100", "RB_iid_200", "NxNLattice_4x4", "NxNLattice_8x8", "NxNLattice_16x16", "NxNLattice_10x10", "SpinGlassUniform_10x10", "SpinGlass_16x16", "NxNLattice_24x24", "NxNLattice_32x32", "Chip_v1", "Chip_dummy", "Chip_small", "Chip_medium", "Chip_large", "Chip_huge", "Chip_20_components", "Chip_50_components", "Chip_100_components"], help='Define the Training dataset')
+                                                                    "TSP_random_20", "COLLAB", "IMDB-BINARY", "RB_iid_100_dummy" , "RB_iid_100", "RB_iid_200", "NxNLattice_4x4", "NxNLattice_8x8", "NxNLattice_16x16", "NxNLattice_10x10", "SpinGlassUniform_10x10", "SpinGlass_16x16", "NxNLattice_24x24", "NxNLattice_32x32", "Chip_v1", "Chip_dummy", "Chip_small", "Chip_medium", "Chip_large", "Chip_huge", "Chip_20_components", "Chip_50_components", "Chip_100_components", "Chip_v1_curriculum_stage1_n100", "Chip_v1_curriculum_stage2_n150", "Chip_v1_curriculum_stage3_n200", "Chip_v1_curriculum_stage4_n250", "Chip_v1_curriculum_stage5_n350"], help='Define the Training dataset')
 parser.add_argument('--graph_mode', default='normal', choices = ["normal", "TSPModel", "Transformer", "UNet"], help='Use U-Net or normal GNN, TSP model is a graph based implementation of the transformer, transformer is to be prefered')
 parser.add_argument('--train_mode', default='REINFORCE', choices = ["REINFORCE", "PPO", "Forward_KL"], help='Use U-Net or normal GNN')
 parser.add_argument('--AnnealSchedule', default='linear', choices = ["linear", "cosine", "exp"], help='Define the Annealing Schedule')
@@ -73,6 +73,9 @@ parser.add_argument('--n_sampling_rounds', default=5, type = int, help='how ofte
 parser.add_argument('--bfloat16', action='store_true')
 parser.add_argument('--no-bfloat16', dest='bfloat16', action='store_false')
 parser.set_defaults(bfloat16=False)
+parser.add_argument('--load_wandb_id', default=None, type=str, help='wandb run id to load checkpoint from (for curriculum training)')
+parser.add_argument('--load_best', action='store_true', help='load best checkpoint instead of last')
+parser.set_defaults(load_best=False)
 
 parser.set_defaults(CE=False)
 parser.set_defaults(graph_norm=True)
@@ -356,7 +359,10 @@ def run( flexible_config, overwrite = True):
     # from jax import config
     # config.update("jax_enable_x64", True)
 
-    train = TrainMeanField(config)
+    # Initialize training with optional checkpoint loading
+    train = TrainMeanField(config,
+                          load_wandb_id=args.load_wandb_id,
+                          load_best_parameters=args.load_best)
 
     train.train()
 
