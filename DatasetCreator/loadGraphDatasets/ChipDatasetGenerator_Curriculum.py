@@ -132,8 +132,10 @@ class ChipDatasetGeneratorCurriculum(BaseGenerator):
         """
         Dynamically adjust component pool and size distribution for target count
 
-        Key insight: Smaller target → smaller pool + slightly larger components
-                     Larger target → larger pool + slightly smaller components
+        Key insight: To reliably hit target count, we need:
+        1. Smaller components (so more fit in the canvas)
+        2. Larger pool (more candidates to choose from)
+        3. Proper density targets
 
         Args:
             target_count: Desired number of components
@@ -145,31 +147,52 @@ class ChipDatasetGeneratorCurriculum(BaseGenerator):
             exp_max: Max component size
         """
 
-        # Pool size: 2-3x target (ensures enough components even with large sizes)
-        max_instance = int(target_count * 2.5)
+        # Pool size: 3-4x target (ensures enough small components)
+        max_instance = int(target_count * 3.5)
 
-        # Adjust size distribution to control density
-        # More components → need smaller sizes to fit at same density
+        # Critical fix: Scale component sizes based on target count
+        #
+        # Target area calculation:
+        # - Canvas area = 4.0
+        # - Target density ≈ 0.8 → total component area ≈ 3.2
+        # - For N components: avg area per component ≈ 3.2/N
+        #
+        # Component area = long_size × short_size = long_size² × aspect_ratio
+        # E[area] ≈ 1.25 × exp_scale² (accounting for aspect ratio distribution)
+        #
+        # Solving: 1.25 × β² = 3.2/N → β = sqrt(3.2/(1.25×N)) = sqrt(2.56/N)
+
+        import math
+
+        # Calculate ideal scale from target density
+        ideal_scale = math.sqrt(2.56 / target_count)
+
+        # Apply stage-specific adjustments
         if target_count < 100:
-            # Few components: allow larger sizes
-            exp_scale = 0.10  # More large components
-            exp_min = 0.03
-            exp_max = 1.2
-        elif target_count < 200:
-            # Medium components: balanced sizes
-            exp_scale = 0.08  # Original v1
+            # ~50-100 components
+            exp_scale = max(0.12, ideal_scale * 1.1)  # Slightly larger for safety
             exp_min = 0.02
-            exp_max = 1.0
-        elif target_count < 300:
-            # Many components: smaller average size
-            exp_scale = 0.06
-            exp_min = 0.015
             exp_max = 0.8
-        else:
-            # Very many components: small sizes
-            exp_scale = 0.05
-            exp_min = 0.01
+        elif target_count < 150:
+            # ~100-150 components
+            exp_scale = max(0.10, ideal_scale)
+            exp_min = 0.018
             exp_max = 0.6
+        elif target_count < 200:
+            # ~150-200 components
+            exp_scale = max(0.08, ideal_scale * 0.95)
+            exp_min = 0.015
+            exp_max = 0.5
+        elif target_count < 300:
+            # ~200-300 components
+            exp_scale = max(0.07, ideal_scale * 0.9)
+            exp_min = 0.012
+            exp_max = 0.4
+        else:
+            # 300+ components
+            exp_scale = max(0.06, ideal_scale * 0.85)
+            exp_min = 0.01
+            exp_max = 0.35
 
         return max_instance, exp_scale, exp_min, exp_max
 
@@ -182,8 +205,8 @@ class ChipDatasetGeneratorCurriculum(BaseGenerator):
         Args:
             x_sizes: (V,) tensor
             y_sizes: (V,) tensor
-            stop_density: float, target density
-            target_count: int, target number of components
+            stop_density: float, target density (0.75-0.9)
+            target_count: int, specific target for this instance (e.g., 95, 103)
 
         Returns:
             positions: (V, 2) tensor
@@ -195,17 +218,19 @@ class ChipDatasetGeneratorCurriculum(BaseGenerator):
         placement = ChipPlacement()
         density = 0.0
 
-        # Sort by area (largest first)
+        # Sort by area (SMALLEST first for better packing!)
+        # Rationale: Place small components first → easier to fit remaining space
         areas = x_sizes * y_sizes
-        _, indices = torch.sort(areas, descending=True)
+        _, indices = torch.sort(areas, descending=False)  # Changed from True!
         x_sizes_sorted = x_sizes[indices]
         y_sizes_sorted = y_sizes[indices]
 
         placed_components = []
 
-        # Allow some flexibility in target count (±5%)
-        min_components = int(target_count * 0.8)
-        max_components = int(target_count * 1.2)
+        # Tight bounds around specific target (±3 components tolerance)
+        # target_count is already sampled from [90, 110], so don't add more variance!
+        min_components = max(10, target_count - 3)
+        max_components = target_count + 3
 
         for idx, (x_size, y_size) in enumerate(zip(x_sizes_sorted, y_sizes_sorted)):
             x_size_val = float(x_size)
@@ -238,23 +263,24 @@ class ChipDatasetGeneratorCurriculum(BaseGenerator):
 
             num_placed = len(placed_components)
 
-            # MODIFIED STOPPING CRITERIA
+            # STOPPING CRITERIA (prioritize component count over density)
             # Stop if:
-            # 1. Reached target count range AND achieved reasonable density (>60%)
-            # 2. OR exceeded max count (safety)
-            # 3. OR reached density target and have at least min_components
+            # 1. Safety: exceeded max count
+            # 2. Success: in target range AND reached minimum density (70% of target)
+            # 3. Fallback: reached density target (even if fewer components)
 
             if num_placed >= max_components:
                 # Safety: don't exceed max
                 break
 
-            if num_placed >= min_components:
-                # In target range - check density
-                if density >= stop_density * 0.8:  # Allow 80% of target density
+            if min_components <= num_placed <= max_components:
+                # In target range - check if density is acceptable
+                if density >= stop_density * 0.7:  # Allow 70% of target density
                     break
 
-            # Original density stopping (with minimum component count)
-            if density >= stop_density and num_placed >= min_components:
+            # Fallback: if we've reached density target, stop
+            # (even if we have fewer components than min)
+            if density >= stop_density:
                 break
 
         # Extract placement data

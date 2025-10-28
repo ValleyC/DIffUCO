@@ -145,7 +145,7 @@ def plot_distributions(results):
         ax.hist(component_counts, bins=30, alpha=0.7, edgecolor='black')
         ax.axvline(component_counts.mean(), color='r', linestyle='--',
                    label=f'Mean: {component_counts.mean():.1f}')
-        ax.axvline(component_counts.median(), color='g', linestyle='--',
+        ax.axvline(np.median(component_counts), color='g', linestyle='--',
                    label=f'Median: {np.median(component_counts):.1f}')
 
         ax.set_xlabel('Number of Components')
