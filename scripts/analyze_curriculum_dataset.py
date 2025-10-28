@@ -25,6 +25,8 @@ parser.add_argument('--all_stages', action='store_true',
 parser.add_argument('--mode', type=str, default='train',
                    choices=['train', 'val', 'test'],
                    help='Which split to analyze')
+parser.add_argument('--seed', type=int, default=123,
+                   help='Random seed used during dataset generation')
 args = parser.parse_args()
 
 CURRICULUM_STAGES = [
@@ -36,15 +38,16 @@ CURRICULUM_STAGES = [
 ]
 
 
-def analyze_dataset(dataset_name, mode='train'):
+def analyze_dataset(dataset_name, mode='train', seed=123):
     """Analyze component count distribution in a dataset"""
 
-    # Load dataset
-    data_dir = Path('data') / dataset_name
-    instances_dir = data_dir / mode / 'instances'
+    # Load dataset - using the actual directory structure
+    # Path: DatasetCreator/loadGraphDatasets/DatasetSolutions/no_norm/{dataset_name}/{mode}/{seed}/ChipPlacement/indexed/
+    data_dir = Path('DatasetCreator/loadGraphDatasets/DatasetSolutions/no_norm') / dataset_name / mode / str(seed) / 'ChipPlacement' / 'indexed'
 
-    if not instances_dir.exists():
-        print(f"Error: Dataset not found at {instances_dir}")
+    if not data_dir.exists():
+        print(f"Error: Dataset not found at {data_dir}")
+        print(f"\nTip: Make sure you're running this from the DIffUCO root directory")
         return None
 
     # Read all instances
@@ -52,10 +55,10 @@ def analyze_dataset(dataset_name, mode='train'):
     densities = []
     hpwls = []
 
-    instance_files = sorted(instances_dir.glob('instance_*.pkl'))
+    instance_files = sorted(data_dir.glob('idx_*_solutions.pickle'))
 
     if len(instance_files) == 0:
-        print(f"Error: No instances found in {instances_dir}")
+        print(f"Error: No instances found in {data_dir}")
         return None
 
     for instance_file in instance_files:
@@ -175,7 +178,7 @@ def main():
         print("="*70)
 
         for dataset_name in CURRICULUM_STAGES:
-            result = analyze_dataset(dataset_name, args.mode)
+            result = analyze_dataset(dataset_name, args.mode, args.seed)
             if result is not None:
                 results.append(result)
 
@@ -184,7 +187,7 @@ def main():
 
     elif args.dataset:
         # Analyze specific dataset
-        result = analyze_dataset(args.dataset, args.mode)
+        result = analyze_dataset(args.dataset, args.mode, args.seed)
         if result is not None:
             plot_distributions([result])
 
