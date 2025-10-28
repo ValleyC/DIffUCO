@@ -135,7 +135,7 @@ def generate_curriculum_stage(stage_config, seed, modes, n_workers=None, dataset
         generator = ChipDatasetGeneratorCurriculum(config)
         generator.generate_dataset(n_workers=n_workers)
 
-        print(f"\n✓ {mode} split complete!\n")
+        print(f"\n[OK] {mode} split complete!\n")
 
     print(f"\n{'='*70}")
     print(f"Stage {stage_config['stage']} generation complete!")

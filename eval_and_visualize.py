@@ -545,11 +545,13 @@ def iterative_push_apart_legalize(positions, component_sizes, canvas_bounds=[-1,
     """
     Iterative "push apart" legalization that minimally adjusts positions.
 
+    SIMPLE O(N²) VERSION - No spatial grid optimization.
+
     This preserves the model's learned spatial structure while eliminating overlaps.
 
     Algorithm:
     1. Start with model's predicted positions
-    2. Detect overlapping pairs
+    2. Detect overlapping pairs (check ALL pairs)
     3. Push overlapping components apart by minimum distance
     4. Handle boundary violations by nudging components back in
     5. Repeat until no violations (or max iterations)
@@ -569,9 +571,7 @@ def iterative_push_apart_legalize(positions, component_sizes, canvas_bounds=[-1,
 
     canvas_min, canvas_max = canvas_bounds[0], canvas_bounds[1]
 
-    # Build spatial grid for efficient collision detection (O(n×c) instead of O(n²))
-    spatial_grid = SpatialGrid(legal_positions.copy(), component_sizes, canvas_bounds)
-    print(f"    Spatial grid: {len(spatial_grid.grid)} cells, cell_size={spatial_grid.cell_size:.3f}")
+    print(f"    Simple iterative push-apart (O(N²) - checking all {n_components*(n_components-1)//2} pairs)")
 
     for iteration in range(max_iterations):
         moved = False
@@ -592,17 +592,12 @@ def iterative_push_apart_legalize(positions, component_sizes, canvas_bounds=[-1,
             new_y = np.clip(pos[1], y_min_required, y_max_required)
 
             if new_x != pos[0] or new_y != pos[1]:
-                new_pos = np.array([new_x, new_y])
-                legal_positions[i] = new_pos
-                spatial_grid.update_position(i, new_pos)
+                legal_positions[i] = np.array([new_x, new_y])
                 moved = True
 
-        # Step 2: Detect and resolve overlaps (OPTIMIZED: O(n×c) instead of O(n²))
+        # Step 2: Detect and resolve overlaps (SIMPLE O(N²): check ALL pairs)
         for i in range(n_components):
-            # Only check nearby components (spatial grid optimization)
-            nearby_components = spatial_grid.get_nearby_components(i)
-
-            for j in nearby_components:
+            for j in range(i + 1, n_components):
                 pos_i, size_i = legal_positions[i], component_sizes[i]
                 pos_j, size_j = legal_positions[j], component_sizes[j]
 
@@ -635,15 +630,8 @@ def iterative_push_apart_legalize(positions, component_sizes, canvas_bounds=[-1,
                     push_amount = (min(overlap_x, overlap_y) / 2.0) + 0.01  # Small margin
 
                     # Push both components apart (equal force)
-                    new_pos_i = legal_positions[i] - direction * push_amount / 2
-                    new_pos_j = legal_positions[j] + direction * push_amount / 2
-
-                    legal_positions[i] = new_pos_i
-                    legal_positions[j] = new_pos_j
-
-                    # Update spatial grid
-                    spatial_grid.update_position(i, new_pos_i)
-                    spatial_grid.update_position(j, new_pos_j)
+                    legal_positions[i] = legal_positions[i] - direction * push_amount / 2
+                    legal_positions[j] = legal_positions[j] + direction * push_amount / 2
 
                     moved = True
 
