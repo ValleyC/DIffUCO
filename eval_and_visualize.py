@@ -32,6 +32,16 @@ def load_test_data(dataset_name="Chip_small", mode="test"):
     """Load test dataset"""
     data_path = f"DatasetCreator/loadGraphDatasets/DatasetSolutions/no_norm/{dataset_name}/{mode}_ChipPlacement_seed_123_solutions.pickle"
 
+    # Fallback to train mode if test mode doesn't exist (for curriculum datasets)
+    if not Path(data_path).exists():
+        fallback_mode = "train"
+        fallback_path = f"DatasetCreator/loadGraphDatasets/DatasetSolutions/no_norm/{dataset_name}/{fallback_mode}_ChipPlacement_seed_123_solutions.pickle"
+        if Path(fallback_path).exists():
+            print(f"Warning: {mode} mode not found, falling back to {fallback_mode} mode")
+            data_path = fallback_path
+        else:
+            raise FileNotFoundError(f"Dataset not found at {data_path} or {fallback_path}")
+
     print(f"Loading test data from: {data_path}")
     with open(data_path, 'rb') as f:
         data = pickle.load(f)
@@ -541,7 +551,7 @@ class SpatialGrid:
 
 
 def iterative_push_apart_legalize(positions, component_sizes, canvas_bounds=[-1, 1],
-                                   max_iterations=100, overlap_threshold=1e-6):
+                                   max_iterations=500, overlap_threshold=1e-6):
     """
     Iterative "push apart" legalization that minimally adjusts positions.
 
@@ -647,24 +657,24 @@ def iterative_push_apart_legalize(positions, component_sizes, canvas_bounds=[-1,
     return legal_positions
 
 
-def visualize_comparison(legal_pos, initial_pos, generated_pos, graph, component_sizes,
-                         legal_metrics, initial_metrics, generated_metrics, instance_id, save_path=None):
+def visualize_comparison(legal_pos, raw_pos, generated_pos, graph, component_sizes,
+                         legal_metrics, raw_metrics, generated_metrics, instance_id, save_path=None):
     """
-    Visualize ground truth, initial, and generated placements side-by-side
+    Visualize ground truth, raw model output, and decoded output side-by-side
 
     Args:
         legal_pos: (V, 2) array of legal positions (ground truth)
-        initial_pos: (V, 2) array of randomized positions
-        generated_pos: (V, 2) array of model-generated positions
+        raw_pos: (V, 2) array of raw model output (before decoder)
+        generated_pos: (V, 2) array of model-generated positions (after decoder)
         legal_metrics: dict with 'hpwl', 'overlap', 'boundary' for ground truth
-        initial_metrics: dict with 'hpwl', 'overlap', 'boundary' for randomized
-        generated_metrics: dict with 'hpwl', 'overlap', 'boundary' for generated
+        raw_metrics: dict with 'hpwl', 'overlap', 'boundary' for raw model output
+        generated_metrics: dict with 'hpwl', 'overlap', 'boundary' for decoded output
     """
     fig, axes = plt.subplots(1, 3, figsize=(24, 8))
 
-    placements = [legal_pos, initial_pos, generated_pos]
-    titles = ["Ground Truth (Legal Placement)", "Initial (Random Placement)", "Generated (Model Output)"]
-    metrics = [legal_metrics, initial_metrics, generated_metrics]
+    placements = [legal_pos, raw_pos, generated_pos]
+    titles = ["Ground Truth (Legal Placement)", "Raw Model Output (Before Decoder)", "Final Output (After Decoder)"]
+    metrics = [legal_metrics, raw_metrics, generated_metrics]
 
     canvas_min, canvas_max = -1.0, 1.0
 
@@ -729,10 +739,10 @@ def visualize_comparison(legal_pos, initial_pos, generated_pos, graph, component
                        fontsize=max(6, min(10, 200 // n_components)),
                        fontweight='bold', color='white', zorder=2)
 
-    # Compute improvements from random to generated
-    hpwl_improvement = (initial_metrics['hpwl'] - generated_metrics['hpwl']) / max(initial_metrics['hpwl'], 1e-6) * 100
-    overlap_improvement = (initial_metrics['overlap'] - generated_metrics['overlap']) / max(initial_metrics['overlap'], 1e-6) * 100 if initial_metrics['overlap'] > 0 else 0
-    boundary_improvement = (initial_metrics['boundary'] - generated_metrics['boundary']) / max(initial_metrics['boundary'], 1e-6) * 100 if initial_metrics['boundary'] > 0 else 0
+    # Compute improvements from raw to decoded
+    hpwl_improvement = (raw_metrics['hpwl'] - generated_metrics['hpwl']) / max(raw_metrics['hpwl'], 1e-6) * 100
+    overlap_improvement = (raw_metrics['overlap'] - generated_metrics['overlap']) / max(raw_metrics['overlap'], 1e-6) * 100 if raw_metrics['overlap'] > 0 else 0
+    boundary_improvement = (raw_metrics['boundary'] - generated_metrics['boundary']) / max(raw_metrics['boundary'], 1e-6) * 100 if raw_metrics['boundary'] > 0 else 0
 
     # How close to ground truth
     hpwl_gap_to_gt = abs(generated_metrics['hpwl'] - legal_metrics['hpwl']) / max(legal_metrics['hpwl'], 1e-6) * 100
@@ -740,11 +750,11 @@ def visualize_comparison(legal_pos, initial_pos, generated_pos, graph, component
     n_components = len(component_sizes)
     fig.suptitle(
         f"Instance {instance_id} - {n_components} Components\n"
-        f"HPWL: GT={legal_metrics['hpwl']:.1f} | Random={initial_metrics['hpwl']:.1f} | Model={generated_metrics['hpwl']:.1f} "
-        f"(Improvement: {hpwl_improvement:+.1f}%, Gap to GT: {hpwl_gap_to_gt:.1f}%)\n"
-        f"Overlap: GT={legal_metrics['overlap']:.2f} | Random={initial_metrics['overlap']:.2f} | Model={generated_metrics['overlap']:.2f} "
+        f"HPWL: GT={legal_metrics['hpwl']:.1f} | Raw={raw_metrics['hpwl']:.1f} | Decoded={generated_metrics['hpwl']:.1f} "
+        f"(Decoder Improvement: {hpwl_improvement:+.1f}%, Gap to GT: {hpwl_gap_to_gt:.1f}%)\n"
+        f"Overlap: GT={legal_metrics['overlap']:.2f} | Raw={raw_metrics['overlap']:.2f} | Decoded={generated_metrics['overlap']:.2f} "
         f"({overlap_improvement:+.1f}%)\n"
-        f"Out-of-Bound: GT={legal_metrics['boundary']:.2f} | Random={initial_metrics['boundary']:.2f} | Model={generated_metrics['boundary']:.2f} "
+        f"Out-of-Bound: GT={legal_metrics['boundary']:.2f} | Raw={raw_metrics['boundary']:.2f} | Decoded={generated_metrics['boundary']:.2f} "
         f"({boundary_improvement:+.1f}%)",
         fontsize=12,
         fontweight='bold'
@@ -850,8 +860,11 @@ def evaluate_instance(trainer, instance_data, instance_id):
         print(f"  Raw Model Overlap: {raw_overlap:.2f}")
         print(f"  Raw Model Out-of-Bound: {raw_boundary:.2f}")
 
+        # Store raw model output
+        raw_positions = best_sample.copy()
+
         # Step 2: Apply iterative push-apart legalization decoder (parameter-free!)
-        print(f"  Applying iterative push-apart decoder...")
+        print(f"  Applying iterative push-apart decoder (max_iterations=500)...")
         legalized_positions = iterative_push_apart_legalize(best_sample, component_sizes)
 
         # Compute legalized metrics (should be legal!)
@@ -871,6 +884,10 @@ def evaluate_instance(trainer, instance_data, instance_id):
         print(f"  Error during inference: {e}")
         import traceback
         traceback.print_exc()
+        raw_positions = initial_positions
+        raw_hpwl = initial_hpwl
+        raw_overlap = initial_overlap
+        raw_boundary = initial_boundary
         generated_positions = initial_positions
         generated_hpwl = initial_hpwl
         generated_overlap = initial_overlap
@@ -890,6 +907,12 @@ def evaluate_instance(trainer, instance_data, instance_id):
         'boundary': initial_boundary
     }
 
+    raw_metrics = {
+        'hpwl': raw_hpwl,
+        'overlap': raw_overlap,
+        'boundary': raw_boundary
+    }
+
     generated_metrics = {
         'hpwl': generated_hpwl,
         'overlap': generated_overlap,
@@ -902,6 +925,8 @@ def evaluate_instance(trainer, instance_data, instance_id):
         'legal_metrics': legal_metrics,
         'initial_positions': initial_positions,
         'initial_metrics': initial_metrics,
+        'raw_positions': raw_positions,
+        'raw_metrics': raw_metrics,
         'generated_positions': generated_positions,
         'generated_metrics': generated_metrics,
         'graph': graph,
@@ -1045,12 +1070,12 @@ def main():
         save_path = output_dir / f"instance_{i}_comparison.png"
         visualize_comparison(
             result['legal_positions'],
-            result['initial_positions'],
+            result['raw_positions'],
             result['generated_positions'],
             result['graph'],
             result['component_sizes'],
             result['legal_metrics'],
-            result['initial_metrics'],
+            result['raw_metrics'],
             result['generated_metrics'],
             i,
             save_path=save_path
