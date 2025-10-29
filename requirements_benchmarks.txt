@@ -1,0 +1,5 @@
+# Requirements for ChipDiffusion Benchmark Preparation
+# Install with: pip install -r requirements_benchmarks.txt
+
+torch>=1.10.0
+torch-geometric>=2.0.0
