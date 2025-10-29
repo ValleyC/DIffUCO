@@ -107,10 +107,16 @@ def download_benchmarks(output_dir: str = "benchmarks"):
         # Extract
         tar_path = os.path.join(iccad_dir, f"{circuit}.tar.gz")
         if os.path.exists(tar_path):
-            with tarfile.open(tar_path, "r:gz") as tar:
-                tar.extractall(iccad_dir)
-            os.remove(tar_path)
-            print(f"    Extracted to {circuit_dir}")
+            try:
+                with tarfile.open(tar_path, "r:gz") as tar:
+                    tar.extractall(iccad_dir)
+                os.remove(tar_path)
+                print(f"    Extracted to {circuit_dir}")
+            except (tarfile.ReadError, OSError) as e:
+                print(f"    ERROR: Could not extract {circuit}.tar.gz (may be HTML error page)")
+                if os.path.exists(tar_path):
+                    os.remove(tar_path)
+                continue
 
     # ISPD2005 benchmarks
     ispd_dir = os.path.join(output_dir, "ispd2005")
@@ -446,7 +452,7 @@ def convert_benchmark(circuit_name: str, circuit_dir: str, output_dir: str,
     with open(output_path, 'wb') as f:
         pickle.dump(positions.numpy(), f)
 
-    print(f"  ✓ {circuit_name}: {data.num_nodes} components, "
+    print(f"  [OK] {circuit_name}: {data.num_nodes} components, "
           f"{data.is_macros.sum().item()} macros, {data.num_edges} edges")
 
     return True
@@ -474,9 +480,15 @@ def main():
 
     ibm_circuits = [f"ibm{i:02d}" for i in range(1, 19)]
     for idx, circuit in enumerate(ibm_circuits):
+        # Try both directory structures
         circuit_dir = os.path.join("benchmarks/iccad04", circuit)
+        if not os.path.exists(circuit_dir):
+            circuit_dir = os.path.join("benchmarks", circuit)  # Alternative structure
+
         if os.path.exists(circuit_dir):
             convert_benchmark(circuit, circuit_dir, iccad_output, idx, verbose=False)
+        else:
+            print(f"  WARNING: {circuit} not found, skipping")
 
     # ISPD2005 benchmarks
     print("\nConverting ISPD2005 benchmarks...")
@@ -524,7 +536,7 @@ def main():
             with open(macro_output_path, 'wb') as f:
                 pickle.dump(macro_positions.numpy(), f)
 
-            print(f"  ✓ IBM{idx+1:02d}: {macro_data.num_nodes} macros, "
+            print(f"  [OK] IBM{idx+1:02d}: {macro_data.num_nodes} macros, "
                   f"{macro_data.num_edges} edges")
             macro_count += 1
 
@@ -559,7 +571,7 @@ def main():
             with open(macro_output_path, 'wb') as f:
                 pickle.dump(macro_positions.numpy(), f)
 
-            print(f"  ✓ {ispd_circuits[idx]}: {macro_data.num_nodes} macros, "
+            print(f"  [OK] {ispd_circuits[idx]}: {macro_data.num_nodes} macros, "
                   f"{macro_data.num_edges} edges")
             macro_count += 1
 
