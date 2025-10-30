@@ -98,10 +98,12 @@ def convert_all_benchmarks(input_dir, output_dir, seed=123):
     input_path = Path(input_dir)
     output_path = Path(output_dir)
 
-    # Create directory structure for BOTH train and test (DIffUCO expects both)
+    # Create directory structure for train/val/test (DIffUCO expects all three)
     train_indexed_dir = output_path / "train" / str(seed) / "ChipPlacement" / "indexed"
+    val_indexed_dir = output_path / "val" / str(seed) / "ChipPlacement" / "indexed"
     test_indexed_dir = output_path / "test" / str(seed) / "ChipPlacement" / "indexed"
     train_indexed_dir.mkdir(parents=True, exist_ok=True)
+    val_indexed_dir.mkdir(parents=True, exist_ok=True)
     test_indexed_dir.mkdir(parents=True, exist_ok=True)
 
     # Find all graph pickle files
@@ -111,7 +113,7 @@ def convert_all_benchmarks(input_dir, output_dir, seed=123):
     print(f"Saving to: {output_path}")
     print()
 
-    # Prepare full dataset dictionary for both train and test
+    # Prepare full dataset dictionary for train/val/test
     train_solutions = {
         "positions": [],
         "H_graphs": [],
@@ -120,6 +122,18 @@ def convert_all_benchmarks(input_dir, output_dir, seed=123):
         "graph_sizes": [],
         "densities": [],
         "Energies": [],  # HPWL
+        "compl_H_graphs": [],
+        "gs_bins": [],
+    }
+
+    val_solutions = {
+        "positions": [],
+        "H_graphs": [],
+        "sizes": [],
+        "edge_attrs": [],
+        "graph_sizes": [],
+        "densities": [],
+        "Energies": [],
         "compl_H_graphs": [],
         "gs_bins": [],
     }
@@ -172,17 +186,17 @@ def convert_all_benchmarks(input_dir, output_dir, seed=123):
             "gs_bins": positions_tensor.numpy(),
         }
 
-        # Save to BOTH train and test directories
+        # Save to train/val/test directories (same data for all)
         train_file = train_indexed_dir / f"idx_{idx}_solutions.pickle"
+        val_file = val_indexed_dir / f"idx_{idx}_solutions.pickle"
         test_file = test_indexed_dir / f"idx_{idx}_solutions.pickle"
 
-        with open(train_file, 'wb') as f:
-            pickle.dump(indexed_solution, f)
-        with open(test_file, 'wb') as f:
-            pickle.dump(indexed_solution, f)
+        for file_path in [train_file, val_file, test_file]:
+            with open(file_path, 'wb') as f:
+                pickle.dump(indexed_solution, f)
 
-        # Add to solutions lists
-        for solutions in [train_solutions, test_solutions]:
+        # Add to all solutions lists
+        for solutions in [train_solutions, val_solutions, test_solutions]:
             solutions["positions"].append(positions_tensor.numpy())
             solutions["H_graphs"].append(jraph_data)
             solutions["sizes"].append(jraph_data.nodes)
@@ -193,20 +207,25 @@ def convert_all_benchmarks(input_dir, output_dir, seed=123):
             solutions["compl_H_graphs"].append(jraph_data)
             solutions["gs_bins"].append(positions_tensor.numpy())
 
-    # Save full dataset files for both train and test
+    # Save full dataset files for train/val/test
     train_file = output_path / f"train_ChipPlacement_seed_{seed}_solutions.pickle"
+    val_file = output_path / f"val_ChipPlacement_seed_{seed}_solutions.pickle"
     test_file = output_path / f"test_ChipPlacement_seed_{seed}_solutions.pickle"
 
     with open(train_file, 'wb') as f:
         pickle.dump(train_solutions, f)
+    with open(val_file, 'wb') as f:
+        pickle.dump(val_solutions, f)
     with open(test_file, 'wb') as f:
         pickle.dump(test_solutions, f)
 
     print(f"\n✓ Conversion complete!")
-    print(f"  Saved {len(graph_files)} benchmarks to BOTH train and test:")
+    print(f"  Saved {len(graph_files)} benchmarks to train/val/test:")
     print(f"  - Train dataset: {train_file.name}")
+    print(f"  - Val dataset: {val_file.name}")
     print(f"  - Test dataset: {test_file.name}")
     print(f"  - Train indexed: {train_indexed_dir}/idx_*_solutions.pickle")
+    print(f"  - Val indexed: {val_indexed_dir}/idx_*_solutions.pickle")
     print(f"  - Test indexed: {test_indexed_dir}/idx_*_solutions.pickle")
     print(f"\n  Total nodes per benchmark:")
     for i, size in enumerate(test_solutions["graph_sizes"]):
