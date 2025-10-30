@@ -172,7 +172,11 @@ def convert_pyg_to_jraph(pyg_data, positions):
 
     senders = edge_index[0]
     receivers = edge_index[1]
-    edge_features = np.ones((n_edges, 1), dtype=np.float32)
+
+    # ChipDiffusion uses 4D edge features (terminal offsets: u_x, u_y, v_x, v_y)
+    # But since we're filtering to macros/IOs only and don't have terminal info,
+    # we'll use dummy 4D features to match the checkpoint's expected dimensions
+    edge_features = np.ones((n_edges, 4), dtype=np.float32)
 
     jraph_data = jraph.GraphsTuple(
         nodes=node_features,
