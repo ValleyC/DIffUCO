@@ -926,18 +926,21 @@ def evaluate_instance(trainer, instance_data, instance_id):
         import traceback
         traceback.print_exc()
         raw_positions = initial_positions
-        raw_hpwl = initial_hpwl
+        raw_hpwl_norm = initial_hpwl
+        raw_hpwl_real = legal_hpwl_real if has_chip_size else initial_hpwl
         raw_overlap = initial_overlap
         raw_boundary = initial_boundary
         generated_positions = initial_positions
-        generated_hpwl = initial_hpwl
+        generated_hpwl_norm = initial_hpwl
+        generated_hpwl_real = legal_hpwl_real if has_chip_size else initial_hpwl
         generated_overlap = initial_overlap
         generated_boundary = initial_boundary
         hpwl_improvement = 0.0
 
     # Create metric dictionaries
     legal_metrics = {
-        'hpwl': legal_hpwl,
+        'hpwl': legal_hpwl_norm,  # Use normalized for visualization
+        'hpwl_real': legal_hpwl_real if has_chip_size else legal_hpwl_norm,
         'overlap': legal_overlap,
         'boundary': legal_boundary
     }
@@ -949,15 +952,17 @@ def evaluate_instance(trainer, instance_data, instance_id):
     }
 
     raw_metrics = {
-        'hpwl': raw_hpwl,
-        'overlap': raw_overlap,
-        'boundary': raw_boundary
+        'hpwl': raw_hpwl_norm if 'raw_hpwl_norm' in locals() else 0.0,
+        'hpwl_real': raw_hpwl_real if has_chip_size and 'raw_hpwl_real' in locals() else 0.0,
+        'overlap': raw_overlap if 'raw_overlap' in locals() else 0.0,
+        'boundary': raw_boundary if 'raw_boundary' in locals() else 0.0,
     }
 
     generated_metrics = {
-        'hpwl': generated_hpwl,
-        'overlap': generated_overlap,
-        'boundary': generated_boundary
+        'hpwl': generated_hpwl_norm if 'generated_hpwl_norm' in locals() else 0.0,
+        'hpwl_real': generated_hpwl_real if has_chip_size and 'generated_hpwl_real' in locals() else 0.0,
+        'overlap': generated_overlap if 'generated_overlap' in locals() else 0.0,
+        'boundary': generated_boundary if 'generated_boundary' in locals() else 0.0,
     }
 
     result = {
@@ -1086,11 +1091,25 @@ def main():
 
     # Create config from checkpoint
     config = checkpoint.get('config', {})
+
+    # CRITICAL: Preserve exact training config for model architecture
+    print(f"\n=== Checkpoint Config ===")
+    print(f"n_diffusion_steps: {config.get('n_diffusion_steps')}")
+    print(f"n_random_node_features: {config.get('n_random_node_features')}")
+    print(f"time_encoding: {config.get('time_encoding')}")
+    print(f"continuous_dim: {config.get('continuous_dim')}")
+
+    # Only override dataset and wandb, preserve ALL model architecture params
     config['dataset_name'] = args.dataset
     config['wandb'] = False  # Disable wandb for evaluation
 
     print("\nInitializing trainer...")
     trainer = TrainMeanField(config)
+
+    # Verify config wasn't overridden
+    print(f"\n=== After Trainer Init ===")
+    print(f"n_diffusion_steps: {trainer.config.get('n_diffusion_steps')}")
+    print(f"n_random_node_features: {trainer.config.get('n_random_node_features')}")
 
     # Load parameters
     trainer.params = checkpoint['params']
