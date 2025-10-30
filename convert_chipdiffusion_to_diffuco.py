@@ -124,6 +124,7 @@ def convert_all_benchmarks(input_dir, output_dir, seed=123):
         "Energies": [],  # HPWL
         "compl_H_graphs": [],
         "gs_bins": [],
+        "legal_positions": [],  # Required by eval_and_visualize.py
     }
 
     val_solutions = {
@@ -136,6 +137,7 @@ def convert_all_benchmarks(input_dir, output_dir, seed=123):
         "Energies": [],
         "compl_H_graphs": [],
         "gs_bins": [],
+        "legal_positions": [],
     }
 
     test_solutions = {
@@ -148,6 +150,7 @@ def convert_all_benchmarks(input_dir, output_dir, seed=123):
         "Energies": [],
         "compl_H_graphs": [],
         "gs_bins": [],
+        "legal_positions": [],
     }
 
     for graph_file in tqdm(graph_files, desc="Converting"):
@@ -184,6 +187,7 @@ def convert_all_benchmarks(input_dir, output_dir, seed=123):
             "Energies": hpwl,
             "compl_H_graphs": jraph_data,
             "gs_bins": positions_tensor.numpy(),
+            "legal_positions": positions_tensor.numpy(),  # Ground truth positions
         }
 
         # Save to train/val/test directories (same data for all)
@@ -206,6 +210,7 @@ def convert_all_benchmarks(input_dir, output_dir, seed=123):
             solutions["Energies"].append(hpwl)
             solutions["compl_H_graphs"].append(jraph_data)
             solutions["gs_bins"].append(positions_tensor.numpy())
+            solutions["legal_positions"].append(positions_tensor.numpy())
 
     # Save full dataset files for train/val/test
     train_file = output_path / f"train_ChipPlacement_seed_{seed}_solutions.pickle"
