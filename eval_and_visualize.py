@@ -18,6 +18,7 @@ from pathlib import Path
 sys.path.append(".")
 
 from train import TrainMeanField
+from chipdiffusion_utils import denormalize_positions_and_sizes
 
 
 def load_checkpoint(checkpoint_path):
@@ -788,15 +789,32 @@ def evaluate_instance(trainer, instance_data, instance_id):
     component_sizes = graph.nodes
     n_components = component_sizes.shape[0]  # Store original number of components
 
+    # Get chip_size for denormalization (if available)
+    chip_size = instance_data.get('chip_sizes', [None])[instance_id] if 'chip_sizes' in instance_data else None
+    has_chip_size = chip_size is not None
+
     print(f"\nEvaluating instance {instance_id}...")
     print(f"  Components: {n_components}")
+    if has_chip_size:
+        print(f"  Canvas: {chip_size[2]-chip_size[0]:.1f} x {chip_size[3]-chip_size[1]:.1f} um")
 
-    # Compute legal (ground truth) metrics
-    legal_hpwl = compute_hpwl(legal_positions, graph)
+    # Compute legal (ground truth) metrics in NORMALIZED space
+    legal_hpwl_norm = compute_hpwl(legal_positions, graph)
     legal_overlap = compute_overlap_penalty(legal_positions, component_sizes)
     legal_boundary = compute_boundary_penalty(legal_positions, component_sizes)
 
-    print(f"  Ground Truth (Legal) HPWL: {legal_hpwl:.2f}")
+    # Compute REAL-SCALE HPWL for comparison with ChipDiffusion
+    if has_chip_size:
+        legal_positions_real, legal_sizes_real = denormalize_positions_and_sizes(
+            legal_positions, component_sizes, chip_size
+        )
+        legal_hpwl_real = compute_hpwl(legal_positions_real, graph)
+        print(f"  Ground Truth HPWL (normalized): {legal_hpwl_norm:.2f}")
+        print(f"  Ground Truth HPWL (real-scale): {legal_hpwl_real:.2f} um")
+    else:
+        legal_hpwl_real = legal_hpwl_norm
+        print(f"  Ground Truth HPWL: {legal_hpwl_norm:.2f}")
+
     print(f"  Ground Truth Overlap: {legal_overlap:.2f}")
     print(f"  Ground Truth Out-of-Bound: {legal_boundary:.2f}")
 
@@ -852,11 +870,20 @@ def evaluate_instance(trainer, instance_data, instance_id):
         print(f"  Best sample: #{best_idx} with energy {best_energy:.2f}")
 
         # Compute raw model output metrics (may be illegal)
-        raw_hpwl = compute_hpwl(best_sample, graph)
+        raw_hpwl_norm = compute_hpwl(best_sample, graph)
         raw_overlap = compute_overlap_penalty(best_sample, component_sizes)
         raw_boundary = compute_boundary_penalty(best_sample, component_sizes)
 
-        print(f"  Raw Model HPWL: {raw_hpwl:.2f}")
+        # Compute real-scale HPWL
+        if has_chip_size:
+            raw_positions_real, _ = denormalize_positions_and_sizes(best_sample, component_sizes, chip_size)
+            raw_hpwl_real = compute_hpwl(raw_positions_real, graph)
+            print(f"  Raw Model HPWL (normalized): {raw_hpwl_norm:.2f}")
+            print(f"  Raw Model HPWL (real-scale): {raw_hpwl_real:.2f} um")
+        else:
+            raw_hpwl_real = raw_hpwl_norm
+            print(f"  Raw Model HPWL: {raw_hpwl_norm:.2f}")
+
         print(f"  Raw Model Overlap: {raw_overlap:.2f}")
         print(f"  Raw Model Out-of-Bound: {raw_boundary:.2f}")
 
@@ -869,16 +896,30 @@ def evaluate_instance(trainer, instance_data, instance_id):
 
         # Compute legalized metrics (should be legal!)
         generated_positions = legalized_positions
-        generated_hpwl = compute_hpwl(generated_positions, graph)
+        generated_hpwl_norm = compute_hpwl(generated_positions, graph)
         generated_overlap = compute_overlap_penalty(generated_positions, component_sizes)
         generated_boundary = compute_boundary_penalty(generated_positions, component_sizes)
 
-        hpwl_improvement = (initial_hpwl - generated_hpwl) / initial_hpwl * 100
+        # Compute real-scale HPWL for final result
+        if has_chip_size:
+            generated_positions_real, _ = denormalize_positions_and_sizes(generated_positions, component_sizes, chip_size)
+            generated_hpwl_real = compute_hpwl(generated_positions_real, graph)
+            print(f"  Legalized HPWL (normalized): {generated_hpwl_norm:.2f}")
+            print(f"  Legalized HPWL (real-scale): {generated_hpwl_real:.2f} um")
+        else:
+            generated_hpwl_real = generated_hpwl_norm
+            print(f"  Legalized HPWL: {generated_hpwl_norm:.2f}")
 
-        print(f"  Legalized HPWL: {generated_hpwl:.2f}")
         print(f"  Legalized Overlap: {generated_overlap:.2f}")
         print(f"  Legalized Out-of-Bound: {generated_boundary:.2f}")
+
+        hpwl_improvement = (initial_hpwl - generated_hpwl_norm) / initial_hpwl * 100
         print(f"  HPWL Improvement (random→legalized): {hpwl_improvement:.1f}%")
+
+        # Report real-scale comparison with ground truth
+        if has_chip_size:
+            hpwl_vs_gt = ((generated_hpwl_real - legal_hpwl_real) / legal_hpwl_real) * 100
+            print(f"  vs Ground Truth (real-scale): {hpwl_vs_gt:+.1f}%")
 
     except Exception as e:
         print(f"  Error during inference: {e}")
