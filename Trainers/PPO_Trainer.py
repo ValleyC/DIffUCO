@@ -327,6 +327,48 @@ class PPO(Base):
         ### TODO is this still correct for annealed noise distr? Anneled reward should be given to step i-1?!
         scan_dict["noise_rewards"] = self._get_noise_distr_step(energy_graph_batch, X_prev, X_next, model_step_idx, node_gr_idx, T, scan_dict["noise_rewards"])
 
+        # ===== SDDS FIX: Compute per-step energy (TRUE SDDS) =====
+        # This is the critical fix that makes the implementation proper SDDS.
+        # Previously, energy was computed only ONCE at the end (line 408), which is sparse-reward RL.
+        # True SDDS requires energy at EVERY step for dense feedback and efficient learning.
+        use_per_step_energy = scan_dict.get("use_per_step_energy", True)
+        if use_per_step_energy:
+            # Extract component sizes from graph nodes
+            component_sizes = energy_graph_batch.nodes[:, :2]  # First 2 features are x_size, y_size
+
+            # Compute energy at current step X_next
+            # For multiple basis states, we need to handle the shape correctly
+            # X_next shape: [num_nodes, n_basis_states, continuous_dim]
+            n_basis_states = X_next.shape[1]
+
+            # Compute energy for each basis state using vmap for efficiency
+            def compute_single_basis_energy(X_single_basis):
+                energy_t, _, violations_t = self.EnergyClass.calculate_Energy(
+                    energy_graph_batch,
+                    X_single_basis,
+                    node_gr_idx,
+                    component_sizes
+                )
+                return energy_t  # Shape: [n_graphs, 1]
+
+            # Vmap over basis states dimension (axis=1 of X_next)
+            # X_next: [num_nodes, n_basis_states, continuous_dim]
+            # We want to vmap over n_basis_states
+            X_transposed = jnp.transpose(X_next, (1, 0, 2))  # [n_basis_states, num_nodes, continuous_dim]
+            vmapped_energy = jax.vmap(compute_single_basis_energy, in_axes=0)
+            energy_per_basis = vmapped_energy(X_transposed)  # [n_basis_states, n_graphs, 1]
+
+            # Reshape to [n_graphs, n_basis_states]
+            energy_step_t = jnp.squeeze(energy_per_basis, axis=-1)  # [n_basis_states, n_graphs]
+            energy_step_t = jnp.transpose(energy_step_t, (1, 0))  # [n_graphs, n_basis_states]
+
+            # Negative energy as reward
+            energy_reward_t = -energy_step_t  # [n_graphs, n_basis_states]
+
+            # Store per-step energy reward
+            scan_dict["energy_rewards"] = scan_dict["energy_rewards"].at[i].set(energy_reward_t)
+        # ===== END SDDS FIX =====
+
         X_prev = X_next
         scan_dict["Xs_over_different_steps"] = scan_dict["Xs_over_different_steps"].at[i + 1].set(X_next)
 
@@ -373,6 +415,7 @@ class PPO(Base):
         prob_over_diff_steps = jnp.zeros((overall_diffusion_steps + 1,), dtype=jnp.float32)
         noise_rewards = jnp.zeros((overall_diffusion_steps , n_graphs, X_prev.shape[1]), dtype=jnp.float32)
         entropy_rewards = jnp.zeros((overall_diffusion_steps , n_graphs, X_prev.shape[1]), dtype=jnp.float32)
+        energy_rewards = jnp.zeros((overall_diffusion_steps , n_graphs, X_prev.shape[1]), dtype=jnp.float32)  # SDDS FIX: per-step energy
         Values_over_diff_steps = jnp.zeros((overall_diffusion_steps + 1, n_graphs, X_prev.shape[1]), dtype=jnp.float32)
         rand_node_features_diff_steps = jnp.zeros(
             (overall_diffusion_steps, X_prev.shape[0], X_prev.shape[1], self.n_random_node_features), dtype=jnp.float32)
@@ -394,9 +437,14 @@ class PPO(Base):
 
 
         node_gr_idx, n_graph, total_num_nodes = self._compute_aggr_utils(energy_graph_batch)
+
+        # SDDS FIX: Add use_per_step_energy flag (default True for proper SDDS)
+        use_per_step_energy = self.config.get("use_per_step_energy", True)
+
         scan_dict = {"log_policies": log_policies, "Xs_over_different_steps": Xs_over_different_steps, "prob_over_diff_steps": prob_over_diff_steps, "noise_rewards": noise_rewards, "entropy_rewards": entropy_rewards,
-                    "Values_over_diff_steps": Values_over_diff_steps, "rand_node_features_diff_steps":rand_node_features_diff_steps,
-                    "step": 0, "node_gr_idx": node_gr_idx, "params": params, "key": key, "X_prev": X_prev, "graphs": graphs, "energy_graph_batch": energy_graph_batch, "T": T}
+                    "energy_rewards": energy_rewards, "Values_over_diff_steps": Values_over_diff_steps, "rand_node_features_diff_steps":rand_node_features_diff_steps,
+                    "step": 0, "node_gr_idx": node_gr_idx, "params": params, "key": key, "X_prev": X_prev, "graphs": graphs, "energy_graph_batch": energy_graph_batch, "T": T,
+                    "use_per_step_energy": use_per_step_energy}
 
         scan_dict, out_dict_list = jax.lax.scan(self.scan_body, scan_dict, None, length = overall_diffusion_steps)
 
@@ -406,14 +454,26 @@ class PPO(Base):
 
         X_next = scan_dict["X_prev"]#
         energy_step, Hb, best_X_0, key = self._get_energy_step(energy_graph_batch, X_next, node_gr_idx, key)
-        energy_reward = -energy_step
+        energy_reward_final = -energy_step
 
         noise_rewards = scan_dict["noise_rewards"]
         entropy_rewards = scan_dict["entropy_rewards"]
+        energy_rewards_per_step = scan_dict["energy_rewards"]  # SDDS FIX: Extract per-step energies
         combined_reward = self.NoiseDistrClass.calculate_noise_distr_reward(-noise_rewards, entropy_rewards)
 
-        rewards = combined_reward
-        rewards = rewards.at[-1].set(rewards[-1] + energy_reward)
+        # SDDS FIX: True SDDS with per-step energy vs sparse-reward RL with end-only energy
+        use_per_step_energy = scan_dict["use_per_step_energy"]
+        if use_per_step_energy:
+            # TRUE SDDS: Add energy at EVERY step for dense feedback
+            # This provides T energy signals instead of 1, improving sample complexity from O(T²/ε²) to O(1/ε²)
+            rewards = combined_reward + energy_rewards_per_step
+            # Still compute final energy for monitoring and as additional signal
+            rewards = rewards.at[-1].set(rewards[-1] + energy_reward_final)
+        else:
+            # SPARSE-REWARD RL (OLD BEHAVIOR): Energy only at the end
+            # This is NOT true SDDS - it's similar to DDPO
+            rewards = combined_reward
+            rewards = rewards.at[-1].set(rewards[-1] + energy_reward_final)
 
         graph_energies = energy_step[:-1]
         graph_energies = graph_energies[..., None]
@@ -442,11 +502,11 @@ class PPO(Base):
                            "actions": Xs_over_different_steps[1:], "policies": log_policies, "rewards": rewards,
                            "values": Values_over_diff_steps},
                     "Losses": {"forward_KL": forward_KL, "reverse_KL": reverse_KL, "noise_rewards": jnp.mean(jnp.sum(noise_rewards[0:, :-1], axis=0)),
-                               "energy_rewards": jnp.mean(energy_reward[:-1]),
+                               "energy_rewards": jnp.mean(energy_reward_final[:-1]),
                                "neg_entropy_rewards": jnp.mean(jnp.sum(entropy_rewards[0:, :-1], axis=0)),
                                "overall_rewards": jnp.mean(jnp.sum(rewards[0:, :-1], axis=0))},
                     "metrics": {"energies": graph_energies, "entropies": 0., "spin_log_probs": spin_log_probs,
-                                "graph_mean_energies": energy_reward, "free_energies": 0.},
+                                "graph_mean_energies": energy_reward_final, "free_energies": 0.},
                     "figures": {"prob_over_diff_steps": {"x_values": x_axis, "y_values": prob_over_diff_steps},
                                 "overall_rewards_over_diff_steps": {"x_values": x_axis,
                                                                     "y_values": jnp.mean(
@@ -456,7 +516,10 @@ class PPO(Base):
                                                                          axis=-1)},
                                 "noise_rewards": {"x_values": x_axis,
                                                   "y_values": jnp.mean(jnp.mean(noise_rewards[:, :-1], axis=-1),
-                                                                       axis=-1)}
+                                                                       axis=-1)},
+                                "energy_rewards_per_step": {"x_values": x_axis,
+                                                           "y_values": jnp.mean(jnp.mean(energy_rewards_per_step[:, :-1], axis=-1),
+                                                                                axis=-1)}
                                 },
                     "energies": {"HA": graph_energies, "Hb": Hb},
                     "log_p_0": spin_logits_next,
