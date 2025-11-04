@@ -331,7 +331,8 @@ class PPO(Base):
         # This is the critical fix that makes the implementation proper SDDS.
         # Previously, energy was computed only ONCE at the end (line 408), which is sparse-reward RL.
         # True SDDS requires energy at EVERY step for dense feedback and efficient learning.
-        use_per_step_energy = scan_dict.get("use_per_step_energy", True)
+        # NOTE: Access from self.config (static) not scan_dict (traced) to avoid JAX tracer bool conversion error
+        use_per_step_energy = self.config.get("use_per_step_energy", True)
         if use_per_step_energy:
             # Extract component sizes from graph nodes
             component_sizes = energy_graph_batch.nodes[:, :2]  # First 2 features are x_size, y_size
@@ -438,13 +439,9 @@ class PPO(Base):
 
         node_gr_idx, n_graph, total_num_nodes = self._compute_aggr_utils(energy_graph_batch)
 
-        # SDDS FIX: Add use_per_step_energy flag (default True for proper SDDS)
-        use_per_step_energy = self.config.get("use_per_step_energy", True)
-
         scan_dict = {"log_policies": log_policies, "Xs_over_different_steps": Xs_over_different_steps, "prob_over_diff_steps": prob_over_diff_steps, "noise_rewards": noise_rewards, "entropy_rewards": entropy_rewards,
                     "energy_rewards": energy_rewards, "Values_over_diff_steps": Values_over_diff_steps, "rand_node_features_diff_steps":rand_node_features_diff_steps,
-                    "step": 0, "node_gr_idx": node_gr_idx, "params": params, "key": key, "X_prev": X_prev, "graphs": graphs, "energy_graph_batch": energy_graph_batch, "T": T,
-                    "use_per_step_energy": use_per_step_energy}
+                    "step": 0, "node_gr_idx": node_gr_idx, "params": params, "key": key, "X_prev": X_prev, "graphs": graphs, "energy_graph_batch": energy_graph_batch, "T": T}
 
         scan_dict, out_dict_list = jax.lax.scan(self.scan_body, scan_dict, None, length = overall_diffusion_steps)
 
@@ -462,7 +459,8 @@ class PPO(Base):
         combined_reward = self.NoiseDistrClass.calculate_noise_distr_reward(-noise_rewards, entropy_rewards)
 
         # SDDS FIX: True SDDS with per-step energy vs sparse-reward RL with end-only energy
-        use_per_step_energy = scan_dict["use_per_step_energy"]
+        # NOTE: Access from self.config (static) to avoid JAX tracer bool conversion error
+        use_per_step_energy = self.config.get("use_per_step_energy", True)
         if use_per_step_energy:
             # TRUE SDDS: Add energy at EVERY step for dense feedback
             # This provides T energy signals instead of 1, improving sample complexity from O(T²/ε²) to O(1/ε²)
