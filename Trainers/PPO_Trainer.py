@@ -690,7 +690,8 @@ class PPO(Base):
 
         out_dict, _ = self.vmapped_calc_log_q(params, jraph_graph_list, Sb_Hb_Nb_X_prev, Sb_Hb_Nb_rand_node_features, Sb_Hb_Nb_X_next, Sb_Nb_t_idx_per_node, batched_key)
 
-        out_values = out_dict["Values"]
+        # Values may not be present for some discrete problems
+        out_values = out_dict.get("Values", jnp.zeros_like(out_dict["state_log_probs"]))
         state_log_probs = out_dict["state_log_probs"]
 
         ratios = jnp.exp(state_log_probs - Sb_Hb_Nb_state_log_probs)
