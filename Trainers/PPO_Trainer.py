@@ -302,7 +302,8 @@ class PPO(Base):
         X_next = out_dict["X_next"]
         state_log_probs = out_dict["state_log_probs"]
         graph_log_prob = out_dict["graph_log_prob"]
-        Values = out_dict["Values"]
+        # Values may not be present during evaluation mode
+        Values = out_dict.get("Values", jnp.zeros_like(state_log_probs))
         rand_node_features = out_dict["rand_node_features"]
 
         # Handle discrete vs continuous outputs
