@@ -216,6 +216,9 @@ class SolutionDataset(Dataset):
     def __load_dataset(self):
         if(self.problem_name == "MaxClv2"):
             select_data_name =  "MaxCl"
+        elif(self.problem_name == "GridChipPlacement"):
+            # GridChipPlacement uses ChipPlacement datasets (same graph structure, different solution representation)
+            select_data_name = "ChipPlacement"
         else:
             select_data_name =  self.problem_name
         base_path = os.path.join(self.path, self.dataset_name)
@@ -309,6 +312,9 @@ class SolutionDataset_InMemory(Dataset):
     def get_dataset_paths(self, cfg, mode="", seed=None):
         if(self.problem_name == "MaxClv2"):
             select_data_name =  "MaxCl"
+        elif(self.problem_name == "GridChipPlacement"):
+            # GridChipPlacement uses ChipPlacement datasets (same graph structure, different solution representation)
+            select_data_name = "ChipPlacement"
         else:
             select_data_name =  self.problem_name
 
