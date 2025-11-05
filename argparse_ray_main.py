@@ -48,6 +48,12 @@ parser.add_argument('--diff_schedule', default= "own", type = str, help='define 
 parser.add_argument('--proj_method', default= "None", choices = ["CE", "feasible", "None"], type = str, help='define projection method')
 parser.add_argument('--overlap_weight', default=2000.0, type = float, help='overlap penalty weight for chip placement')
 parser.add_argument('--boundary_weight', default=2000.0, type = float, help='boundary penalty weight for chip placement')
+# Two-stage training approach (HPWL + spread regularization)
+parser.add_argument('--use_constraints_in_training', action='store_true', help='use overlap/boundary constraints during training (default: False for two-stage)')
+parser.add_argument('--spread_weight', default=0.5, type = float, help='spread regularization weight (prevents stacking in HPWL-only training)')
+parser.add_argument('--use_min_distance', action='store_true', help='use minimum distance constraint (alternative to spread regularization)')
+parser.add_argument('--min_distance_weight', default=0.1, type = float, help='minimum distance penalty weight')
+parser.add_argument('--min_distance_threshold', default=0.2, type = float, help='minimum distance threshold for penalty')
 parser.add_argument('--grid_width', default=10, type = int, help='grid width for GridChipPlacement (e.g., 10 for 10x10 grid)')
 parser.add_argument('--grid_height', default=10, type = int, help='grid height for GridChipPlacement (e.g., 10 for 10x10 grid)')
 parser.add_argument('--collision_weight', default=1.5, type = float, help='collision penalty weight for GridChipPlacement (TSP-style, default 1.5)')
@@ -259,6 +265,11 @@ def detect_and_run_for_loops():
                                                 "value_weighting": args.value_weighting,
                                                 "overlap_weight": args.overlap_weight,
                                                 "boundary_weight": args.boundary_weight,
+                                                "use_constraints_in_training": args.use_constraints_in_training,
+                                                "spread_weight": args.spread_weight,
+                                                "use_min_distance": args.use_min_distance,
+                                                "min_distance_weight": args.min_distance_weight,
+                                                "min_distance_threshold": args.min_distance_threshold,
                                                 "use_normalization": args.use_normalization,
                                                 "reward_scale": args.reward_scale,
                                             }
@@ -349,6 +360,11 @@ def run( flexible_config, overwrite = True):
         "continuous_dim": 0,  # Default 0 for discrete; set to 2 for ChipPlacement
         "overlap_weight": 2000.0,  # ChipPlacement: overlap penalty weight (use 50-100 with normalization!)
         "boundary_weight": 2000.0,  # ChipPlacement: boundary penalty weight (use 50-100 with normalization!)
+        "use_constraints_in_training": False,  # ChipPlacement: two-stage approach (train HPWL+spread, eval with constraints)
+        "spread_weight": 0.5,  # ChipPlacement: spread regularization weight (prevents stacking in HPWL-only training)
+        "use_min_distance": False,  # ChipPlacement: use minimum distance constraint (alternative to spread)
+        "min_distance_weight": 0.1,  # ChipPlacement: minimum distance penalty weight
+        "min_distance_threshold": 0.2,  # ChipPlacement: minimum distance threshold
         "use_normalization": True,  # ChipPlacement: use normalization (TSP-style, default True)
         "reward_scale": 0.01,  # ChipPlacement: reward scaling when normalization disabled
         "grid_width": 10,  # GridChipPlacement: grid width (10x10 = 100 cells)

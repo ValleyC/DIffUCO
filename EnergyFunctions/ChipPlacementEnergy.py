@@ -45,12 +45,32 @@ class ChipPlacementEnergyClass(BaseEnergyClass):
         self.canvas_x_min = config.get("canvas_x_min", -1.0)
         self.canvas_y_min = config.get("canvas_y_min", -1.0)
 
+        # Two-stage training approach: HPWL optimization + legalization
+        self.use_constraints_in_training = config.get("use_constraints_in_training", True)
+        self.spread_weight = config.get("spread_weight", 0.5)
+
+        # Minimum distance constraint (alternative to spread)
+        self.use_min_distance = config.get("use_min_distance", False)
+        self.min_distance_weight = config.get("min_distance_weight", 0.1)
+        self.min_distance_threshold = config.get("min_distance_threshold", 0.2)
+
         print("ChipPlacementEnergy initialized")
         print(f"  Continuous dim: {self.continuous_dim}")
         print(f"  Overlap weight: {self.overlap_weight} (normalized by HPWL scale)")
         print(f"  Boundary weight: {self.boundary_weight} (normalized by HPWL scale)")
         print(f"  Note: Weights represent 'X times more important than HPWL'")
         print(f"  Canvas: [{self.canvas_x_min}, {self.canvas_x_min + self.canvas_width}] x [{self.canvas_y_min}, {self.canvas_y_min + self.canvas_height}]")
+        print(f"\n  Two-Stage Training Configuration:")
+        print(f"  Use constraints in training: {self.use_constraints_in_training}")
+        if not self.use_constraints_in_training:
+            print(f"  → Training mode: HPWL + spread regularization (no overlap/boundary penalties)")
+            print(f"  → Spread weight: {self.spread_weight} (encourages component distribution)")
+            if self.use_min_distance:
+                print(f"  → Min distance constraint: weight={self.min_distance_weight}, threshold={self.min_distance_threshold}")
+            print(f"  → Evaluation mode: Full energy with all constraints")
+            print(f"  → Post-processing: Legalization decoder can be applied after sampling")
+        else:
+            print(f"  → Training mode: Full energy with all constraints")
         print("______________")
 
     @partial(jax.jit, static_argnums=(0,))
@@ -306,6 +326,111 @@ class ChipPlacementEnergyClass(BaseEnergyClass):
 
         return boundary_penalty_per_graph
 
+    @partial(jax.jit, static_argnums=(0, 3))
+    def _compute_spread_regularization(self, positions, node_gr_idx, n_graph):
+        """
+        Compute spread regularization to prevent stacking during HPWL-only training.
+
+        Encourages components to spread out by rewarding high variance in positions.
+        This prevents the trivial solution of stacking all components at one location.
+
+        Spread = negative of inverse variance (higher variance = lower penalty)
+
+        Approach:
+        - Compute variance of component positions within each graph
+        - Penalize LOW variance (clustered/stacked components)
+        - Reward HIGH variance (well-distributed components)
+
+        Args:
+            positions: component positions [num_components, 2]
+            node_gr_idx: component to graph mapping
+            n_graph: number of graphs
+
+        Returns:
+            spread_penalty_per_graph: penalty for clustering [n_graphs,]
+                                     (lower is better = more spread)
+        """
+        def compute_spread_for_graph(graph_id):
+            # Get components belonging to this graph
+            mask = (node_gr_idx == graph_id)
+            graph_positions = positions[jnp.where(mask, size=positions.shape[0], fill_value=0)[0]]
+            n_components_in_graph = jnp.sum(mask.astype(jnp.float32))
+
+            # Compute mean position
+            mean_pos = jnp.sum(graph_positions, axis=0) / jnp.maximum(n_components_in_graph, 1.0)
+
+            # Compute variance (average squared distance from mean)
+            # Higher variance = more spread = better
+            squared_distances = jnp.sum((graph_positions - mean_pos) ** 2, axis=1)
+            variance = jnp.sum(squared_distances * mask.astype(jnp.float32)) / jnp.maximum(n_components_in_graph, 1.0)
+
+            # Penalty = 1 / (variance + epsilon)
+            # Low variance → high penalty (stacked)
+            # High variance → low penalty (spread)
+            epsilon = 0.01  # Avoid division by zero
+            spread_penalty = 1.0 / (variance + epsilon)
+
+            return spread_penalty
+
+        # Vectorize over graphs
+        graph_ids = jnp.arange(n_graph)
+        spread_penalty_per_graph = jax.vmap(compute_spread_for_graph)(graph_ids)
+
+        return spread_penalty_per_graph
+
+    @partial(jax.jit, static_argnums=(0, 3))
+    def _compute_min_distance_penalty(self, positions, node_gr_idx, n_graph):
+        """
+        Compute minimum distance constraint penalty (alternative to spread).
+
+        Penalizes pairs of components that are too close together.
+        This directly prevents stacking without penalizing overlap area.
+
+        For each pair i,j:
+        - distance = ||pos_i - pos_j||
+        - if distance < threshold: penalty += (threshold - distance)^2
+
+        Args:
+            positions: component positions [num_components, 2]
+            node_gr_idx: component to graph mapping
+            n_graph: number of graphs
+
+        Returns:
+            min_distance_penalty_per_graph: penalty for close pairs [n_graphs,]
+        """
+        num_components = positions.shape[0]
+
+        # Pairwise distances (vectorized)
+        pos_i = positions[:, jnp.newaxis, :]  # [num_components, 1, 2]
+        pos_j = positions[jnp.newaxis, :, :]  # [1, num_components, 2]
+
+        # Euclidean distance
+        distances = jnp.sqrt(jnp.sum((pos_i - pos_j) ** 2, axis=2))  # [num_components, num_components]
+
+        # Penalty for distances below threshold
+        violations = jnp.maximum(0.0, self.min_distance_threshold - distances)
+        penalty_per_pair = violations ** 2
+
+        # Only count each pair once (upper triangle, excluding diagonal)
+        i_indices = jnp.arange(num_components)[:, jnp.newaxis]
+        j_indices = jnp.arange(num_components)[jnp.newaxis, :]
+        upper_triangle_mask = (i_indices < j_indices).astype(jnp.float32)
+
+        # Only consider pairs within same graph
+        same_graph_mask = (node_gr_idx[:, jnp.newaxis] == node_gr_idx[jnp.newaxis, :]).astype(jnp.float32)
+
+        # Combined mask
+        valid_pairs_mask = upper_triangle_mask * same_graph_mask
+
+        # Apply mask
+        penalty_masked = penalty_per_pair * valid_pairs_mask
+
+        # Sum per component and aggregate to graph
+        penalty_per_component = jnp.sum(penalty_masked, axis=1)
+        penalty_per_graph = jax.ops.segment_sum(penalty_per_component, node_gr_idx, n_graph)
+
+        return penalty_per_graph
+
     def calculate_relaxed_Energy(self, H_graph, positions, node_gr_idx, component_sizes=None):
         """
         Calculate relaxed energy (same as regular energy for continuous case).
@@ -320,8 +445,16 @@ class ChipPlacementEnergyClass(BaseEnergyClass):
         """
         Calculate energy loss for training.
 
-        During training, we use the predicted mean positions (not sampled positions)
-        for a smoother gradient signal.
+        Two training modes:
+        1. use_constraints_in_training=True (default):
+           - Energy = HPWL + overlap_penalty + boundary_penalty
+           - Direct constraint enforcement during training
+
+        2. use_constraints_in_training=False (two-stage approach):
+           - Training: Energy = HPWL + spread_regularization
+           - Focus on learning HPWL optimization without overlap penalties
+           - Spread regularization prevents trivial stacking solution
+           - Constraints enforced via post-legalization or evaluation only
 
         Args:
             H_graph: graph structure
@@ -333,8 +466,86 @@ class ChipPlacementEnergyClass(BaseEnergyClass):
         Returns:
             Energy, positions, constraint_violations
         """
-        # Use mean for energy calculation (deterministic)
-        return self.calculate_Energy(H_graph, mean, node_gr_idx, component_sizes)
+        n_graph = H_graph.n_node.shape[0]
+        nodes = H_graph.nodes
+        total_num_nodes = jax.tree_util.tree_leaves(nodes)[0].shape[0]
+
+        # Extract component sizes (same as calculate_Energy)
+        if component_sizes is None:
+            if nodes.shape[-1] >= 2:
+                component_sizes = nodes[:, :2]
+            else:
+                component_sizes = jnp.full((total_num_nodes, 2), 0.1)
+
+        # Ensure positions has correct shape
+        positions = mean
+        if len(positions.shape) == 3:
+            positions = positions[:, 0, :]
+        elif len(positions.shape) == 1:
+            positions = jnp.reshape(positions, (total_num_nodes, self.continuous_dim))
+
+        # Compute HPWL (always included)
+        hpwl_per_graph = self._compute_hpwl(H_graph, positions, node_gr_idx, n_graph)
+
+        if self.use_constraints_in_training:
+            # Mode 1: Full constraint enforcement during training
+            # Compute overlap and boundary penalties
+            overlap_per_graph = self._compute_overlap_penalty(
+                positions, component_sizes, node_gr_idx, n_graph
+            )
+            boundary_per_graph = self._compute_boundary_penalty(
+                positions, component_sizes, node_gr_idx, n_graph
+            )
+
+            # Normalized penalties (same as calculate_Energy)
+            normalized_overlap_penalty = overlap_per_graph * hpwl_per_graph
+            normalized_boundary_penalty = boundary_per_graph * hpwl_per_graph
+
+            Energy_per_graph = (
+                hpwl_per_graph +
+                self.overlap_weight * normalized_overlap_penalty +
+                self.boundary_weight * normalized_boundary_penalty
+            )
+
+            constraint_violations_per_graph = overlap_per_graph + boundary_per_graph
+
+        else:
+            # Mode 2: Two-stage approach - HPWL optimization + spread regularization
+            # No overlap/boundary penalties during training
+            # Instead use spread regularization to prevent stacking
+
+            # Compute spread penalty
+            spread_penalty_per_graph = self._compute_spread_regularization(
+                positions, node_gr_idx, n_graph
+            )
+
+            # Optionally add minimum distance constraint
+            if self.use_min_distance:
+                min_distance_penalty = self._compute_min_distance_penalty(
+                    positions, node_gr_idx, n_graph
+                )
+                Energy_per_graph = (
+                    hpwl_per_graph +
+                    self.spread_weight * spread_penalty_per_graph +
+                    self.min_distance_weight * min_distance_penalty
+                )
+            else:
+                Energy_per_graph = (
+                    hpwl_per_graph +
+                    self.spread_weight * spread_penalty_per_graph
+                )
+
+            # For monitoring: report spread penalty as "violations" during training
+            # (not actual constraint violations, just clustering metric)
+            constraint_violations_per_graph = spread_penalty_per_graph
+
+        # Ensure output shape [n_graphs, 1]
+        if len(Energy_per_graph.shape) == 1:
+            Energy_per_graph = jnp.expand_dims(Energy_per_graph, axis=-1)
+        if len(constraint_violations_per_graph.shape) == 1:
+            constraint_violations_per_graph = jnp.expand_dims(constraint_violations_per_graph, axis=-1)
+
+        return Energy_per_graph, positions, constraint_violations_per_graph
 
     def get_HPWL_value(self, H_graph, positions, node_gr_idx):
         """
