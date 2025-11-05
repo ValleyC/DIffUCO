@@ -7,7 +7,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--debug', action='store_true', help='Switch ray into local mode for debugging')
 parser.add_argument('--multi_gpu', action='store_true', help='wheter to use multi gpu or not, KEEP IT ALWAYS TRUE')
 parser.add_argument('--mode', default='Diffusion', choices = ["Diffusion"], help='Define the Approach')
-parser.add_argument('--EnergyFunction', default='MIS', choices = ["MaxCut", "MIS", "MVC", "MaxCl", "WMIS", "MDS", "MaxClv2", "TSP", "IsingModel", "SpinGlass", "SpinGlass", "ChipPlacement"], help='Define the EnergyFunction of the IsingModel')
+parser.add_argument('--EnergyFunction', default='MIS', choices = ["MaxCut", "MIS", "MVC", "MaxCl", "WMIS", "MDS", "MaxClv2", "TSP", "IsingModel", "SpinGlass", "SpinGlass", "ChipPlacement", "GridChipPlacement"], help='Define the EnergyFunction of the IsingModel')
 parser.add_argument('--IsingMode', default='RB_iid_100', choices = ["Gset","BA_large","RB_iid_small", "RB_iid_dummy", "BA_dummy", "RB_iid_large" ,"RRG_200_k_=all", "BA_small","TSP_random_100",
                                                                     "TSP_random_20", "COLLAB", "IMDB-BINARY", "RB_iid_100_dummy" , "RB_iid_100", "RB_iid_200", "NxNLattice_4x4", "NxNLattice_8x8", "NxNLattice_16x16", "NxNLattice_10x10", "SpinGlassUniform_10x10", "SpinGlass_16x16", "NxNLattice_24x24", "NxNLattice_32x32", "Chip_v1", "Chip_dummy", "Chip_small", "Chip_medium", "Chip_large", "Chip_huge", "Chip_20_components", "Chip_50_components", "Chip_100_components", "Chip_v1_curriculum_stage1_n100", "Chip_v1_curriculum_stage2_n150", "Chip_v1_curriculum_stage3_n200", "Chip_v1_curriculum_stage4_n250", "Chip_v1_curriculum_stage5_n350"], help='Define the Training dataset')
 parser.add_argument('--graph_mode', default='normal', choices = ["normal", "TSPModel", "Transformer", "UNet"], help='Use U-Net or normal GNN, TSP model is a graph based implementation of the transformer, transformer is to be prefered')
@@ -48,6 +48,8 @@ parser.add_argument('--diff_schedule', default= "own", type = str, help='define 
 parser.add_argument('--proj_method', default= "None", choices = ["CE", "feasible", "None"], type = str, help='define projection method')
 parser.add_argument('--overlap_weight', default=2000.0, type = float, help='overlap penalty weight for chip placement')
 parser.add_argument('--boundary_weight', default=2000.0, type = float, help='boundary penalty weight for chip placement')
+parser.add_argument('--grid_width', default=10, type = int, help='grid width for GridChipPlacement (e.g., 10 for 10x10 grid)')
+parser.add_argument('--grid_height', default=10, type = int, help='grid height for GridChipPlacement (e.g., 10 for 10x10 grid)')
 parser.add_argument('--use_normalization', action='store_true', help='use normalization for continuous problems (TSP-style, default True)')
 parser.add_argument('--no-use_normalization', dest='use_normalization', action='store_false', help='disable normalization (use reward scaling instead)')
 parser.add_argument('--reward_scale', default=0.01, type=float, help='reward scaling factor when normalization is disabled (default 0.01)')
@@ -264,6 +266,11 @@ def detect_and_run_for_loops():
                                             if args.EnergyFunction == "ChipPlacement":
                                                 flexible_config["continuous_dim"] = 2
 
+                                            # Add grid parameters for GridChipPlacement
+                                            if args.EnergyFunction == "GridChipPlacement":
+                                                flexible_config["grid_width"] = args.grid_width
+                                                flexible_config["grid_height"] = args.grid_height
+
                                             run(flexible_config=flexible_config, overwrite=True)
 
 
@@ -341,7 +348,9 @@ def run( flexible_config, overwrite = True):
         "overlap_weight": 2000.0,  # ChipPlacement: overlap penalty weight (use 50-100 with normalization!)
         "boundary_weight": 2000.0,  # ChipPlacement: boundary penalty weight (use 50-100 with normalization!)
         "use_normalization": True,  # ChipPlacement: use normalization (TSP-style, default True)
-        "reward_scale": 0.01  # ChipPlacement: reward scaling when normalization disabled
+        "reward_scale": 0.01,  # ChipPlacement: reward scaling when normalization disabled
+        "grid_width": 10,  # GridChipPlacement: grid width (10x10 = 100 cells)
+        "grid_height": 10,  # GridChipPlacement: grid height
     }
 
     if(overwrite):
