@@ -7,9 +7,11 @@ from .TSPEnergy import TSPEnergyClass
 from .IsingModelEnergy import IsingModelEnergyClass
 from .SpinGlass import SpinGlassEnergyClass
 from .ChipPlacementEnergy import ChipPlacementEnergyClass
+from .GridChipPlacementEnergy import GridChipPlacementEnergyClass
 
 noise_distribution_registry = {"MIS": MISEnergyClass, "MVC": MVCEnergyClass, "MaxCl": MaxClEnergyClass, "SpinGlass": SpinGlassEnergyClass, "SpinGlassUniform": SpinGlassEnergyClass,
-                               "TSP": TSPEnergyClass, "MaxCut": MaxCutEnergyClass, "MDS": MDSEnergyClass, "IsingModel": IsingModelEnergyClass, "ChipPlacement": ChipPlacementEnergyClass}
+                               "TSP": TSPEnergyClass, "MaxCut": MaxCutEnergyClass, "MDS": MDSEnergyClass, "IsingModel": IsingModelEnergyClass, "ChipPlacement": ChipPlacementEnergyClass,
+                               "GridChipPlacement": GridChipPlacementEnergyClass}
 
 
 
