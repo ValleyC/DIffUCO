@@ -108,7 +108,7 @@ class GridChipPlacementEnergyClass(BaseEnergyClass):
         return positions
 
     @partial(jax.jit, static_argnums=(0,))
-    def calculate_Energy(self, H_graph, bins, node_gr_idx):
+    def calculate_Energy(self, H_graph, bins, node_gr_idx, component_sizes=None):
         """
         Calculate energy for grid-based placement.
 
@@ -117,12 +117,16 @@ class GridChipPlacementEnergyClass(BaseEnergyClass):
             bins: grid cell assignments [num_components, 1]
                   bins[i] ∈ {0, 1, ..., n_grid_cells-1}
             node_gr_idx: component to graph mapping
+            component_sizes: NOT USED for grid (grid doesn't need sizes for overlap checking)
+                           Included for compatibility with continuous ChipPlacement interface
 
         Returns:
             Energy_per_graph: HPWL per graph [n_graphs, 1]
             bins: grid assignments (unchanged)
             violations: always zero (grid guarantees feasibility)
         """
+        # Note: component_sizes is ignored for grid placement
+        # Grid cells guarantee no overlaps regardless of component size
         n_graph = H_graph.n_node.shape[0]
 
         # Convert grid indices to continuous positions
@@ -184,11 +188,11 @@ class GridChipPlacementEnergyClass(BaseEnergyClass):
 
         return hpwl_per_graph
 
-    def calculate_relaxed_Energy(self, H_graph, bins, node_gr_idx):
+    def calculate_relaxed_Energy(self, H_graph, bins, node_gr_idx, component_sizes=None):
         """
         Calculate relaxed energy (same as regular for grid case).
         """
-        return self.calculate_Energy(H_graph, bins, node_gr_idx)
+        return self.calculate_Energy(H_graph, bins, node_gr_idx, component_sizes)
 
     @partial(jax.jit, static_argnums=(0,))
     def calculate_Energy_loss(self, H_graph, logits, node_gr_idx):
@@ -231,7 +235,7 @@ class GridChipPlacementEnergyClass(BaseEnergyClass):
 
         return Energy_per_graph, soft_positions, violations_per_graph
 
-    def get_HPWL_value(self, H_graph, bins, node_gr_idx):
+    def get_HPWL_value(self, H_graph, bins, node_gr_idx, component_sizes=None):
         """
         Get HPWL value (same as energy for grid placement).
 
@@ -239,11 +243,12 @@ class GridChipPlacementEnergyClass(BaseEnergyClass):
             H_graph: graph structure
             bins: grid cell assignments
             node_gr_idx: component to graph mapping
+            component_sizes: NOT USED (for compatibility)
 
         Returns:
             HPWL per graph
         """
-        Energy, _, _ = self.calculate_Energy(H_graph, bins, node_gr_idx)
+        Energy, _, _ = self.calculate_Energy(H_graph, bins, node_gr_idx, component_sizes)
         return Energy
 
     def get_continuous_positions(self, bins):
