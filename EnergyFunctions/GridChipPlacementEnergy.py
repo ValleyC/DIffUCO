@@ -53,6 +53,10 @@ class GridChipPlacementEnergyClass(BaseEnergyClass):
         self.canvas_x_min = config.get("canvas_x_min", -1.0)
         self.canvas_y_min = config.get("canvas_y_min", -1.0)
 
+        # Collision penalty weight (TSP-style constraint enforcement)
+        # Like TSP's A=1.45, this enforces unique cell assignments
+        self.collision_weight = config.get("collision_weight", 1.5)
+
         # Grid cell dimensions
         self.cell_width = self.canvas_width / self.grid_width
         self.cell_height = self.canvas_height / self.grid_height
@@ -80,7 +84,8 @@ class GridChipPlacementEnergyClass(BaseEnergyClass):
         print(f"  Canvas: [{self.canvas_x_min}, {self.canvas_x_min + self.canvas_width}] × "
               f"[{self.canvas_y_min}, {self.canvas_y_min + self.canvas_height}]")
         print(f"  n_bernoulli_features: {self.n_bernoulli_features}")
-        print(f"  Energy: HPWL only (no overlap/boundary penalties)")
+        print(f"  Collision weight: {self.collision_weight} (TSP-style constraint)")
+        print(f"  Energy: HPWL + collision_penalty (like TSP assignment constraints)")
         print("______________")
 
     def _grid_to_continuous(self, grid_indices):
@@ -107,10 +112,68 @@ class GridChipPlacementEnergyClass(BaseEnergyClass):
 
         return positions
 
+    @partial(jax.jit, static_argnums=(0, 3))
+    def _compute_collision_penalty(self, bins, node_gr_idx, n_graph):
+        """
+        Compute collision penalty (TSP-style constraint enforcement).
+
+        Like TSP enforces each position visited exactly once:
+          penalty = sum_over_cells (num_components_in_cell - 1)^2
+
+        This penalizes multiple components in the same grid cell.
+
+        Args:
+            bins: grid cell assignments [num_components, 1]
+            node_gr_idx: component to graph mapping
+            n_graph: number of graphs
+
+        Returns:
+            collision_penalty_per_graph: [n_graphs,] collision penalty per graph
+        """
+        # Flatten bins if needed
+        if len(bins.shape) > 1:
+            bins_flat = jnp.squeeze(bins, axis=-1)  # [num_components]
+        else:
+            bins_flat = bins
+
+        # Convert to one-hot: [num_components, n_grid_cells]
+        x_mat = jax.nn.one_hot(bins_flat, num_classes=self.n_grid_cells, dtype=jnp.float32)
+
+        # Count components per cell: sum over components
+        # components_per_cell: [num_components, n_grid_cells] -> sum axis 0 -> [n_grid_cells]
+        # But we need to do this per graph...
+
+        # For each graph, compute collision penalty
+        def compute_collision_for_graph(graph_id):
+            # Get components belonging to this graph
+            mask = (node_gr_idx == graph_id).astype(jnp.float32)  # [num_components]
+
+            # Count components per cell for this graph
+            # x_mat: [num_components, n_grid_cells]
+            # mask: [num_components]
+            components_per_cell = jnp.sum(x_mat * mask[:, jnp.newaxis], axis=0)  # [n_grid_cells]
+
+            # Penalty: (count - 1)^2 for each cell (penalize > 1 component per cell)
+            # If cell has 0 components: (0-1)^2 = 1 (undesirable, but okay)
+            # If cell has 1 component: (1-1)^2 = 0 (perfect!)
+            # If cell has 2 components: (2-1)^2 = 1 (collision!)
+            # If cell has k components: (k-1)^2 (strong penalty)
+
+            # Actually, let's only penalize cells with > 1 component:
+            penalty = jnp.sum(jnp.maximum(0, components_per_cell - 1.0) ** 2)
+
+            return penalty
+
+        # Vectorize over graphs
+        graph_ids = jnp.arange(n_graph)
+        collision_penalty_per_graph = jax.vmap(compute_collision_for_graph)(graph_ids)
+
+        return collision_penalty_per_graph
+
     @partial(jax.jit, static_argnums=(0,))
     def calculate_Energy(self, H_graph, bins, node_gr_idx, component_sizes=None):
         """
-        Calculate energy for grid-based placement.
+        Calculate energy for grid-based placement with collision penalty.
 
         Args:
             H_graph: jraph graph structure
@@ -121,12 +184,11 @@ class GridChipPlacementEnergyClass(BaseEnergyClass):
                            Included for compatibility with continuous ChipPlacement interface
 
         Returns:
-            Energy_per_graph: HPWL per graph [n_graphs, 1]
+            Energy_per_graph: (HPWL + collision_penalty) per graph [n_graphs, 1]
             bins: grid assignments (unchanged)
-            violations: always zero (grid guarantees feasibility)
+            violations: collision penalty (for monitoring) [n_graphs, 1]
         """
         # Note: component_sizes is ignored for grid placement
-        # Grid cells guarantee no overlaps regardless of component size
         n_graph = H_graph.n_node.shape[0]
 
         # Convert grid indices to continuous positions
@@ -135,11 +197,15 @@ class GridChipPlacementEnergyClass(BaseEnergyClass):
         # Compute HPWL
         hpwl_per_graph = self._compute_hpwl(H_graph, positions, node_gr_idx, n_graph)
 
-        # Energy = HPWL only (no penalties needed!)
-        Energy_per_graph = hpwl_per_graph
+        # Compute collision penalty (TSP-style constraint)
+        collision_penalty_per_graph = self._compute_collision_penalty(bins, node_gr_idx, n_graph)
 
-        # No constraint violations (grid guarantees feasibility)
-        violations_per_graph = jnp.zeros_like(Energy_per_graph)
+        # Energy = HPWL + weighted collision penalty
+        # collision_weight acts like TSP's A parameter (typically 1.45-2.0)
+        Energy_per_graph = hpwl_per_graph + self.collision_weight * collision_penalty_per_graph
+
+        # Report collision penalty as "violations" for monitoring
+        violations_per_graph = collision_penalty_per_graph
 
         # Ensure output shape [n_graphs, 1]
         if len(Energy_per_graph.shape) == 1:
@@ -197,11 +263,12 @@ class GridChipPlacementEnergyClass(BaseEnergyClass):
     @partial(jax.jit, static_argnums=(0,))
     def calculate_Energy_loss(self, H_graph, logits, node_gr_idx):
         """
-        Calculate energy loss for training.
+        Calculate energy loss for training with collision penalty.
 
         During training with discrete SDDS:
         - logits: [num_components, n_grid_cells] probabilities
-        - We use soft assignment (expected position) for gradient flow
+        - We use soft assignment for gradient flow
+        - Collision penalty: penalize overlapping probability mass
 
         Args:
             H_graph: graph structure
@@ -225,8 +292,29 @@ class GridChipPlacementEnergyClass(BaseEnergyClass):
         n_graph = H_graph.n_node.shape[0]
         hpwl_per_graph = self._compute_hpwl(H_graph, soft_positions, node_gr_idx, n_graph)
 
-        Energy_per_graph = hpwl_per_graph
-        violations_per_graph = jnp.zeros_like(Energy_per_graph)
+        # Compute SOFT collision penalty for training
+        # For each graph, sum probability mass per cell and penalize if > 1
+        def compute_soft_collision_for_graph(graph_id):
+            # Get components belonging to this graph
+            mask = (node_gr_idx == graph_id).astype(jnp.float32)  # [num_components]
+
+            # Sum probability mass per cell for this graph
+            # probs: [num_components, n_grid_cells]
+            # mask: [num_components]
+            prob_mass_per_cell = jnp.sum(probs * mask[:, jnp.newaxis], axis=0)  # [n_grid_cells]
+
+            # Soft penalty: (prob_mass - 1)^2 if prob_mass > 1
+            penalty = jnp.sum(jnp.maximum(0, prob_mass_per_cell - 1.0) ** 2)
+
+            return penalty
+
+        # Vectorize over graphs
+        graph_ids = jnp.arange(n_graph)
+        collision_penalty_per_graph = jax.vmap(compute_soft_collision_for_graph)(graph_ids)
+
+        # Total energy with collision penalty
+        Energy_per_graph = hpwl_per_graph + self.collision_weight * collision_penalty_per_graph
+        violations_per_graph = collision_penalty_per_graph
 
         if len(Energy_per_graph.shape) == 1:
             Energy_per_graph = jnp.expand_dims(Energy_per_graph, axis=-1)

@@ -50,6 +50,7 @@ parser.add_argument('--overlap_weight', default=2000.0, type = float, help='over
 parser.add_argument('--boundary_weight', default=2000.0, type = float, help='boundary penalty weight for chip placement')
 parser.add_argument('--grid_width', default=10, type = int, help='grid width for GridChipPlacement (e.g., 10 for 10x10 grid)')
 parser.add_argument('--grid_height', default=10, type = int, help='grid height for GridChipPlacement (e.g., 10 for 10x10 grid)')
+parser.add_argument('--collision_weight', default=1.5, type = float, help='collision penalty weight for GridChipPlacement (TSP-style, default 1.5)')
 parser.add_argument('--use_normalization', action='store_true', help='use normalization for continuous problems (TSP-style, default True)')
 parser.add_argument('--no-use_normalization', dest='use_normalization', action='store_false', help='disable normalization (use reward scaling instead)')
 parser.add_argument('--reward_scale', default=0.01, type=float, help='reward scaling factor when normalization is disabled (default 0.01)')
@@ -270,6 +271,7 @@ def detect_and_run_for_loops():
                                             if args.EnergyFunction == "GridChipPlacement":
                                                 flexible_config["grid_width"] = args.grid_width
                                                 flexible_config["grid_height"] = args.grid_height
+                                                flexible_config["collision_weight"] = args.collision_weight
 
                                             run(flexible_config=flexible_config, overwrite=True)
 
@@ -351,6 +353,7 @@ def run( flexible_config, overwrite = True):
         "reward_scale": 0.01,  # ChipPlacement: reward scaling when normalization disabled
         "grid_width": 10,  # GridChipPlacement: grid width (10x10 = 100 cells)
         "grid_height": 10,  # GridChipPlacement: grid height
+        "collision_weight": 1.5,  # GridChipPlacement: collision penalty weight (TSP-style)
     }
 
     if(overwrite):
