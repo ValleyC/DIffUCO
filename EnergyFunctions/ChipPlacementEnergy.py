@@ -64,7 +64,7 @@ class ChipPlacementEnergyClass(BaseEnergyClass):
         print(f"  Use constraints in training: {self.use_constraints_in_training}")
         if not self.use_constraints_in_training:
             print(f"  → Training mode: HPWL + spread regularization (no overlap/boundary penalties)")
-            print(f"  → Spread weight: {self.spread_weight} (encourages component distribution)")
+            print(f"  → Spread weight: {self.spread_weight} (auto-normalized by √N, scale-invariant)")
             if self.use_min_distance:
                 print(f"  → Min distance constraint: weight={self.min_distance_weight}, threshold={self.min_distance_threshold}")
             print(f"  → Evaluation mode: Full energy with all constraints")
@@ -340,6 +340,7 @@ class ChipPlacementEnergyClass(BaseEnergyClass):
         - Compute variance of component positions within each graph
         - Penalize LOW variance (clustered/stacked components)
         - Reward HIGH variance (well-distributed components)
+        - Normalize by √N so spread_weight has consistent meaning across problem sizes
 
         Args:
             positions: component positions [num_components, 2]
@@ -349,6 +350,7 @@ class ChipPlacementEnergyClass(BaseEnergyClass):
         Returns:
             spread_penalty_per_graph: penalty for clustering [n_graphs,]
                                      (lower is better = more spread)
+                                     Normalized so same weight works across problem sizes
         """
         def compute_spread_for_graph(graph_id):
             # Get components belonging to this graph
@@ -370,7 +372,13 @@ class ChipPlacementEnergyClass(BaseEnergyClass):
             epsilon = 0.01  # Avoid division by zero
             spread_penalty = 1.0 / (variance + epsilon)
 
-            return spread_penalty
+            # Normalize by √N to maintain consistent relative importance vs HPWL
+            # HPWL scales roughly as O(√N), so this makes spread_weight scale-invariant
+            # spread_weight = 0.5 now means "same relative importance" for all problem sizes
+            normalization_factor = jnp.sqrt(jnp.maximum(n_components_in_graph, 1.0))
+            normalized_spread_penalty = spread_penalty * normalization_factor
+
+            return normalized_spread_penalty
 
         # Vectorize over graphs
         graph_ids = jnp.arange(n_graph)
