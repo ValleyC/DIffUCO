@@ -98,10 +98,12 @@ class ContinuousHead(nn.Module):
         position_mean = self.mean_layer(embeddings)  # [num_components, 1, continuous_dim]
 
         # Predict log variance: clip to prevent numerical instability
-        # log_var in [-10, 2] corresponds to std in [exp(-5)=0.0067, exp(1)=2.718]
-        # This range allows both precise (small std) and exploratory (large std) behavior
+        # CRITICAL FIX for large datasets: raise variance floor to prevent premature collapse
+        # Old: log_var in [-10, 2] → std in [0.0067, 2.718] - too confident for dense placements!
+        # New: log_var in [-4, 2] → std in [0.135, 2.718] - maintains exploration longer
+        # This prevents the "mean_prob explosion at epoch 300" bug on large datasets
         position_log_var = self.log_var_layer(embeddings)  # [num_components, 1, continuous_dim]
-        position_log_var = jnp.clip(position_log_var, -10.0, 2.0)
+        position_log_var = jnp.clip(position_log_var, -4.0, 2.0)  # Raised floor: -10 → -4
 
         # Store position predictions
         out_dict["position_mean"] = position_mean
@@ -202,7 +204,7 @@ class ContinuousHeadChip(nn.Module):
         # Predict positions
         position_mean = self.mean_layer(embeddings)
         position_log_var = self.log_var_layer(embeddings)
-        position_log_var = jnp.clip(position_log_var, -10.0, 2.0)
+        position_log_var = jnp.clip(position_log_var, -4.0, 2.0)  # Raised floor to prevent variance collapse
 
         out_dict["position_mean"] = position_mean
         out_dict["position_log_var"] = position_log_var
