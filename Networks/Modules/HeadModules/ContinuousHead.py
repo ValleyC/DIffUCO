@@ -93,9 +93,13 @@ class ContinuousHead(nn.Module):
         # embeddings shape: [num_components, 1, embedding_dim]
         # We keep the middle dimension (1) for compatibility with existing code structure
 
-        # Predict mean: unbounded continuous values
-        # For chip placement: (-1, 1) range typical, but model learns appropriate scale
-        position_mean = self.mean_layer(embeddings)  # [num_components, 1, continuous_dim]
+        # Predict mean: MUST be bounded to prevent explosion
+        # Without bounds, positions can explode to ±10,000, causing HPWL catastrophe
+        # Spread regularization ENCOURAGES spreading but doesn't limit HOW MUCH
+        # → Positive feedback loop: spread to ±∞ gives low spread penalty but infinite HPWL!
+        # Canvas is [-1, 1], so use tanh to bound to [-1.5, 1.5] with soft boundaries
+        position_mean_raw = self.mean_layer(embeddings)  # [num_components, 1, continuous_dim]
+        position_mean = 1.5 * jnp.tanh(position_mean_raw)  # Bounded to [-1.5, 1.5]
 
         # Predict log variance: clip to prevent numerical instability
         # CRITICAL FIX for large datasets: raise variance floor to prevent premature collapse
@@ -202,7 +206,10 @@ class ContinuousHeadChip(nn.Module):
             embeddings = jnp.concatenate([embeddings, size_features], axis=-1)
 
         # Predict positions
-        position_mean = self.mean_layer(embeddings)
+        # CRITICAL: Bound position_mean to prevent explosion (see ContinuousHead for details)
+        position_mean_raw = self.mean_layer(embeddings)
+        position_mean = 1.5 * jnp.tanh(position_mean_raw)  # Bounded to [-1.5, 1.5]
+
         position_log_var = self.log_var_layer(embeddings)
         position_log_var = jnp.clip(position_log_var, -4.0, 2.0)  # Raised floor to prevent variance collapse
 

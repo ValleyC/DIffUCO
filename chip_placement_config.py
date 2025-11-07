@@ -76,8 +76,13 @@ CHIP_PLACEMENT_CONFIG = {
 
     # ===== Energy Function Settings =====
     # ChipPlacementEnergy parameters
-    "overlap_weight": 2000.0,                # Penalty weight for component overlaps
-    "boundary_weight": 2000.0,               # Penalty weight for out-of-bounds
+
+    # CRITICAL: Enable two-stage training to prevent energy explosions
+    "use_constraints_in_training": False,    # Use spread regularization instead of overlap penalties
+    "spread_weight": 0.5,                    # √N-normalized spread penalty (scale-invariant)
+
+    "overlap_weight": 2000.0,                # Penalty weight for component overlaps (unused with two-stage)
+    "boundary_weight": 2000.0,               # Penalty weight for out-of-bounds (unused with two-stage)
     "canvas_width": 2.0,                   # Canvas width (x: [-1, 1])
     "canvas_height": 2.0,                  # Canvas height (y: [-1, 1])
     "canvas_x_min": -1.0,                  # Canvas x minimum
