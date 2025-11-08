@@ -536,27 +536,6 @@ class ChipPlacementEnergyClass(BaseEnergyClass):
             )
             normalized_boundary_penalty = boundary_per_graph * hpwl_per_graph
 
-            # DEBUG: Temporary diagnostic output (remove after debugging)
-            # Only print for first few calls to avoid spam
-            if not hasattr(self, '_debug_count'):
-                self._debug_count = 0
-            should_debug = self._debug_count < 3
-            if should_debug:
-                self._debug_count += 1
-
-            if should_debug:
-                print(f"\n[ENERGY BREAKDOWN DEBUG]")
-                print(f"  HPWL: {float(hpwl_per_graph[0]):.2f}")
-                print(f"  Boundary (raw): {float(boundary_per_graph[0]):.4f}")
-                print(f"  Boundary (normalized=raw*HPWL): {float(normalized_boundary_penalty[0]):.2f}")
-                print(f"  Spread: {float(spread_penalty_per_graph[0]):.4f}")
-                print(f"  Boundary contribution: {float(self.boundary_weight * normalized_boundary_penalty[0]):.2f}")
-                print(f"  Spread contribution: {float(self.spread_weight * spread_penalty_per_graph[0]):.2f}")
-                print(f"  >>> TOTAL ENERGY: {float(hpwl_per_graph[0] + self.boundary_weight * normalized_boundary_penalty[0] + self.spread_weight * spread_penalty_per_graph[0]):.2f}")
-                print(f"  >>> Coupling formula: boundary_weight × (boundary × HPWL)")
-                print(f"  >>> This causes explosion when both boundary and HPWL are high!")
-            # END DEBUG
-
             # Optionally add minimum distance constraint
             if self.use_min_distance:
                 min_distance_penalty = self._compute_min_distance_penalty(
