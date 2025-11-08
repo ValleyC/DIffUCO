@@ -56,9 +56,9 @@ class ChipPlacementEnergyClass(BaseEnergyClass):
 
         print("ChipPlacementEnergy initialized")
         print(f"  Continuous dim: {self.continuous_dim}")
-        print(f"  Overlap weight: {self.overlap_weight} (normalized by HPWL scale)")
-        print(f"  Boundary weight: {self.boundary_weight} (normalized by HPWL scale)")
-        print(f"  Note: Weights represent 'X times more important than HPWL'")
+        print(f"  Overlap weight: {self.overlap_weight} (absolute weight, no HPWL coupling)")
+        print(f"  Boundary weight: {self.boundary_weight} (absolute weight, no HPWL coupling)")
+        print(f"  Note: Weights represent absolute penalty importance (decoupled from HPWL)")
         print(f"  Canvas: [{self.canvas_x_min}, {self.canvas_x_min + self.canvas_width}] x [{self.canvas_y_min}, {self.canvas_y_min + self.canvas_height}]")
         print(f"\n  Two-Stage Training Configuration:")
         print(f"  Use constraints in training: {self.use_constraints_in_training}")
@@ -131,20 +131,21 @@ class ChipPlacementEnergyClass(BaseEnergyClass):
             positions, component_sizes, node_gr_idx, n_graph
         )
 
-        # Total energy with HPWL-normalized penalties
-        # Scale penalties by HPWL so that weights represent "how many times HPWL"
-        # when the violation is at unit scale (1.0).
-        # This makes penalties scale naturally with circuit size.
-
-        # For overlap_weight=5.0: when overlap=1.0, penalty = 5.0 * HPWL
-        # This ensures the same weight values work across different circuit sizes.
-        normalized_overlap_penalty = overlap_per_graph * hpwl_per_graph
-        normalized_boundary_penalty = boundary_per_graph * hpwl_per_graph
+        # FIX: Use raw penalties without HPWL coupling to prevent energy explosion
+        # Old approach tried to scale penalties by HPWL, but this created dangerous coupling:
+        # - Energy = HPWL + weight × (penalty × HPWL)
+        # - This creates quadratic scaling with circuit size (O(N^1.5) for N components)
+        # - For Chip_huge (N=400): HPWL≈5600, boundary≈40 → coupled energy = 2.2M explosion!
+        #
+        # New approach: Use raw penalties directly with absolute weights
+        # - Energy = HPWL + weight × penalty
+        # - No coupling, linear scaling with problem size
+        # - Weights now represent absolute importance, not "X times HPWL"
 
         Energy_per_graph = (
             hpwl_per_graph +
-            self.overlap_weight * normalized_overlap_penalty +
-            self.boundary_weight * normalized_boundary_penalty
+            self.overlap_weight * overlap_per_graph +
+            self.boundary_weight * boundary_per_graph
         )
 
         # Constraint violations (for monitoring)
@@ -534,7 +535,8 @@ class ChipPlacementEnergyClass(BaseEnergyClass):
             boundary_per_graph = self._compute_boundary_penalty(
                 positions, component_sizes, node_gr_idx, n_graph
             )
-            normalized_boundary_penalty = boundary_per_graph * hpwl_per_graph
+            # FIX: Use raw boundary penalty without HPWL coupling to prevent explosion
+            # Old (buggy): normalized_boundary_penalty = boundary_per_graph * hpwl_per_graph
 
             # Optionally add minimum distance constraint
             if self.use_min_distance:
@@ -544,14 +546,14 @@ class ChipPlacementEnergyClass(BaseEnergyClass):
                 Energy_per_graph = (
                     hpwl_per_graph +
                     self.spread_weight * spread_penalty_per_graph +
-                    self.boundary_weight * normalized_boundary_penalty +
+                    self.boundary_weight * boundary_per_graph +
                     self.min_distance_weight * min_distance_penalty
                 )
             else:
                 Energy_per_graph = (
                     hpwl_per_graph +
                     self.spread_weight * spread_penalty_per_graph +
-                    self.boundary_weight * normalized_boundary_penalty
+                    self.boundary_weight * boundary_per_graph
                 )
 
             # For monitoring: report spread penalty + boundary as "violations" during training
