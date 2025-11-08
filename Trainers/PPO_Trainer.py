@@ -592,7 +592,8 @@ class PPO(Base):
                 relaxed_energies_per_graph, _, Hb_per_graph = self.vmapped_relaxed_energy(jraph_graph, X_0, node_gr_idx, component_sizes)
             else:
                 # Use training energy with spread regularization (two-stage approach)
-                relaxed_energies_per_graph, _, Hb_per_graph = self.vmapped_relaxed_energy_for_Loss(jraph_graph, X_0, node_gr_idx, component_sizes)
+                # Note: calculate_Energy_loss expects (H_graph, mean, log_var, node_gr_idx, component_sizes)
+                relaxed_energies_per_graph, _, Hb_per_graph = self.vmapped_relaxed_energy_for_Loss(jraph_graph, X_0, None, node_gr_idx, component_sizes)
 
             best_X_0 = X_0
             Hb = jnp.mean(jnp.abs(Hb_per_graph)[:-1])
