@@ -343,14 +343,28 @@ class PPO(Base):
             # X_next shape: [num_nodes, n_basis_states, continuous_dim]
             n_basis_states = X_next.shape[1]
 
+            # FIX: Respect use_constraints_in_training flag
+            use_constraints = self.config.get("use_constraints_in_training", True)
+
             # Compute energy for each basis state using vmap for efficiency
             def compute_single_basis_energy(X_single_basis):
-                energy_t, _, violations_t = self.EnergyClass.calculate_Energy(
-                    energy_graph_batch,
-                    X_single_basis,
-                    node_gr_idx,
-                    component_sizes
-                )
+                if use_constraints:
+                    # Use full energy with overlap/boundary penalties
+                    energy_t, _, violations_t = self.EnergyClass.calculate_Energy(
+                        energy_graph_batch,
+                        X_single_basis,
+                        node_gr_idx,
+                        component_sizes
+                    )
+                else:
+                    # Use training energy with spread regularization (two-stage approach)
+                    energy_t, _, violations_t = self.EnergyClass.calculate_Energy_loss(
+                        energy_graph_batch,
+                        X_single_basis,
+                        None,  # log_var not needed
+                        node_gr_idx,
+                        component_sizes
+                    )
                 return energy_t  # Shape: [n_graphs, 1]
 
             # Vmap over basis states dimension (axis=1 of X_next)
@@ -570,7 +584,16 @@ class PPO(Base):
         else:
             # FIX: Extract component sizes from graph nodes and pass to energy function
             component_sizes = jraph_graph.nodes[:, :2]  # First 2 features are x_size, y_size
-            relaxed_energies_per_graph, _, Hb_per_graph = self.vmapped_relaxed_energy(jraph_graph, X_0, node_gr_idx, component_sizes)
+
+            # FIX: Respect use_constraints_in_training flag
+            use_constraints = self.config.get("use_constraints_in_training", True)
+            if use_constraints:
+                # Use full energy with overlap/boundary penalties
+                relaxed_energies_per_graph, _, Hb_per_graph = self.vmapped_relaxed_energy(jraph_graph, X_0, node_gr_idx, component_sizes)
+            else:
+                # Use training energy with spread regularization (two-stage approach)
+                relaxed_energies_per_graph, _, Hb_per_graph = self.vmapped_relaxed_energy_for_Loss(jraph_graph, X_0, node_gr_idx, component_sizes)
+
             best_X_0 = X_0
             Hb = jnp.mean(jnp.abs(Hb_per_graph)[:-1])
 

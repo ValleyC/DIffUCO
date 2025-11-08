@@ -64,8 +64,9 @@ class Base(ABC):
 
         self.relaxed_Energy_for_Loss = EnergyClass.calculate_Energy_loss
         # FIX: Add component_sizes as 4th argument (not vmapped, same for all basis states)
-        self.vmapped_relaxed_energy_for_Loss = jax.vmap(self.relaxed_Energy_for_Loss, in_axes=(None, 1, None, None),
-                                                        out_axes=(1))
+        # FIX: out_axes should be (1, 1, 1) to match 3 return values: (Energy, positions, violations)
+        self.vmapped_relaxed_energy_for_Loss = jax.vmap(self.relaxed_Energy_for_Loss, in_axes=(None, 1, None, None, None),
+                                                        out_axes=(1, 1, 1))
 
         self.pmap_apply_CE_on_p = jax.pmap(self.apply_CE_on_p, in_axes=(0, 0))
 
