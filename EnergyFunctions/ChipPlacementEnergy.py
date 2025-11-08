@@ -508,14 +508,14 @@ class ChipPlacementEnergyClass(BaseEnergyClass):
                 positions, component_sizes, node_gr_idx, n_graph
             )
 
-            # Normalized penalties (same as calculate_Energy)
-            normalized_overlap_penalty = overlap_per_graph * hpwl_per_graph
-            normalized_boundary_penalty = boundary_per_graph * hpwl_per_graph
+            # FIX: Use raw penalties without HPWL coupling (same fix as calculate_Energy)
+            # Old (buggy): normalized_overlap_penalty = overlap_per_graph * hpwl_per_graph
+            # Old (buggy): normalized_boundary_penalty = boundary_per_graph * hpwl_per_graph
 
             Energy_per_graph = (
                 hpwl_per_graph +
-                self.overlap_weight * normalized_overlap_penalty +
-                self.boundary_weight * normalized_boundary_penalty
+                self.overlap_weight * overlap_per_graph +
+                self.boundary_weight * boundary_per_graph
             )
 
             constraint_violations_per_graph = overlap_per_graph + boundary_per_graph
