@@ -63,8 +63,9 @@ class ChipPlacementEnergyClass(BaseEnergyClass):
         print(f"\n  Two-Stage Training Configuration:")
         print(f"  Use constraints in training: {self.use_constraints_in_training}")
         if not self.use_constraints_in_training:
-            print(f"  → Training mode: HPWL + spread regularization (no overlap/boundary penalties)")
-            print(f"  → Spread weight: {self.spread_weight} (auto-normalized by √N, scale-invariant)")
+            print(f"  → Training mode: HPWL + spread + boundary (no overlap penalties)")
+            print(f"  → Spread weight: {self.spread_weight} (prevents stacking, √N-normalized)")
+            print(f"  → Boundary weight: {self.boundary_weight} (prevents out-of-bounds drift)")
             if self.use_min_distance:
                 print(f"  → Min distance constraint: weight={self.min_distance_weight}, threshold={self.min_distance_threshold}")
             print(f"  → Evaluation mode: Full energy with all constraints")
@@ -459,10 +460,11 @@ class ChipPlacementEnergyClass(BaseEnergyClass):
            - Direct constraint enforcement during training
 
         2. use_constraints_in_training=False (two-stage approach):
-           - Training: Energy = HPWL + spread_regularization
+           - Training: Energy = HPWL + spread_regularization + boundary_penalty
            - Focus on learning HPWL optimization without overlap penalties
            - Spread regularization prevents trivial stacking solution
-           - Constraints enforced via post-legalization or evaluation only
+           - Boundary penalty prevents out-of-bounds drift (essential!)
+           - Overlap constraints enforced via post-legalization or evaluation only
 
         Args:
             H_graph: graph structure
@@ -519,13 +521,20 @@ class ChipPlacementEnergyClass(BaseEnergyClass):
 
         else:
             # Mode 2: Two-stage approach - HPWL optimization + spread regularization
-            # No overlap/boundary penalties during training
-            # Instead use spread regularization to prevent stacking
+            # No OVERLAP penalties during training (they couple with HPWL)
+            # But KEEP boundary penalties (prevent out-of-bounds drift)
+            # Use spread regularization to prevent stacking
 
             # Compute spread penalty
             spread_penalty_per_graph = self._compute_spread_regularization(
                 positions, node_gr_idx, n_graph
             )
+
+            # IMPORTANT: Keep boundary penalties to prevent out-of-bounds drift
+            boundary_per_graph = self._compute_boundary_penalty(
+                positions, component_sizes, node_gr_idx, n_graph
+            )
+            normalized_boundary_penalty = boundary_per_graph * hpwl_per_graph
 
             # Optionally add minimum distance constraint
             if self.use_min_distance:
@@ -535,17 +544,18 @@ class ChipPlacementEnergyClass(BaseEnergyClass):
                 Energy_per_graph = (
                     hpwl_per_graph +
                     self.spread_weight * spread_penalty_per_graph +
+                    self.boundary_weight * normalized_boundary_penalty +
                     self.min_distance_weight * min_distance_penalty
                 )
             else:
                 Energy_per_graph = (
                     hpwl_per_graph +
-                    self.spread_weight * spread_penalty_per_graph
+                    self.spread_weight * spread_penalty_per_graph +
+                    self.boundary_weight * normalized_boundary_penalty
                 )
 
-            # For monitoring: report spread penalty as "violations" during training
-            # (not actual constraint violations, just clustering metric)
-            constraint_violations_per_graph = spread_penalty_per_graph
+            # For monitoring: report spread penalty + boundary as "violations" during training
+            constraint_violations_per_graph = spread_penalty_per_graph + boundary_per_graph
 
         # Ensure output shape [n_graphs, 1]
         if len(Energy_per_graph.shape) == 1:
