@@ -669,11 +669,12 @@ class TrainMeanField:
 					energies = log_dict["energies"]
 
 					# Extract energy values (handle different structures)
+					# FIX: Check "HA" first - contains per-graph energies from PPO training
 					if isinstance(energies, dict):
-						if "energy" in energies:
+						if "HA" in energies:
+							energy_vals = np.array(energies["HA"]).flatten()
+						elif "energy" in energies:
 							energy_vals = np.array(energies["energy"]).flatten()
-						elif "Hb" in energies:
-							energy_vals = np.array(energies["Hb"]).flatten()
 						else:
 							energy_vals = np.array(list(energies.values())[0]).flatten()
 					else:
