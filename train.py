@@ -633,7 +633,9 @@ class TrainMeanField:
 		print("start training for ", self.epochs, self.curr_epoch)
 		#graph_shape_list = []
 		for epoch in tqdm(epoch_range, desc="Training"):
-			print("epoch", epoch, "in", self.epochs)
+			print(f"\n{'='*80}")
+			print(f"EPOCH {epoch}/{self.epochs}")
+			print(f"{'='*80}")
 			start_train_time = time.time()
 
 			if("linear" == self.AnnealSchedule):
@@ -653,12 +655,99 @@ class TrainMeanField:
 			epoch_time_dict["epoch_time/logging"] = []
 			for iter, (batch_dict) in enumerate(self.dataloader_train):
 				gt_normed_energies = batch_dict["energies"]
-				print("batch", iter, "of", len(self.dataloader_train))
-				print("batchsize is", len(gt_normed_energies))
+
+				# Debug output every 10 batches
+				if iter % 10 == 0:
+					print(f"[Batch {iter}/{len(self.dataloader_train)}] size={len(gt_normed_energies)}")
 
 				step1 = time.time()
 				loss, (log_dict, energy_graph_batch, batching_time) = self.train_step(batch_dict)
 				step3 = time.time()
+
+				# Debug: Check for energy explosion every 10 batches
+				if iter % 10 == 0 and "energies" in log_dict:
+					import numpy as np
+					energies = log_dict["energies"]
+
+					# Extract energy values (handle different structures)
+					if isinstance(energies, dict):
+						if "energy" in energies:
+							energy_vals = np.array(energies["energy"]).flatten()
+						elif "Hb" in energies:
+							energy_vals = np.array(energies["Hb"]).flatten()
+						else:
+							energy_vals = np.array(list(energies.values())[0]).flatten()
+					else:
+						energy_vals = np.array(energies).flatten()
+
+					# Compute statistics
+					energy_min = np.min(energy_vals)
+					energy_max = np.max(energy_vals)
+					energy_mean = np.mean(energy_vals)
+					energy_std = np.std(energy_vals)
+
+					# Check for problems
+					has_nan = np.any(np.isnan(energy_vals))
+					has_inf = np.any(np.isinf(energy_vals))
+
+					print(f"  Energy: min={energy_min:.1f}, max={energy_max:.1f}, mean={energy_mean:.1f}, std={energy_std:.1f}")
+
+					if has_nan:
+						print(f"  ⚠ WARNING: NaN detected!")
+					if has_inf:
+						print(f"  ⚠ WARNING: Inf detected!")
+					if energy_mean > 100000:
+						print(f"  ⚠ EXPLOSION! Mean={energy_mean:.0f}")
+					elif energy_mean > 10000:
+						print(f"  ⚠ High energy: {energy_mean:.0f}")
+
+					# Also check loss
+					if hasattr(loss, '__iter__'):
+						loss_val = np.mean(loss)
+					else:
+						loss_val = float(loss)
+					print(f"  Loss: {loss_val:.4f}")
+
+					# CRITICAL: Try to extract position statistics from log_dict
+					try:
+						# Check if we have metrics with detailed info
+						if "metrics" in log_dict:
+							metrics = log_dict["metrics"]
+
+							# Try to get positions
+							if hasattr(metrics, '__iter__') and not isinstance(metrics, str):
+								# Flatten structure to find positions
+								def find_positions(obj, depth=0):
+									if depth > 3:  # Prevent infinite recursion
+										return None
+									if isinstance(obj, dict):
+										if "positions" in obj:
+											return obj["positions"]
+										for v in obj.values():
+											result = find_positions(v, depth+1)
+											if result is not None:
+												return result
+									elif isinstance(obj, (list, tuple)) and len(obj) > 0:
+										return find_positions(obj[0], depth+1)
+									return None
+
+								positions = find_positions(metrics)
+								if positions is not None:
+									pos_arr = np.array(positions)
+									if pos_arr.size > 0 and pos_arr.ndim >= 2:
+										pos_min = np.min(pos_arr)
+										pos_max = np.max(pos_arr)
+										pos_mean = np.mean(np.abs(pos_arr))
+
+										# Check bounds (canvas is [-1, 1], but tanh can output [-1.5, 1.5])
+										n_oob = np.sum((pos_arr < -1.5) | (pos_arr > 1.5))
+										pct_oob = 100.0 * n_oob / pos_arr.size if pos_arr.size > 0 else 0
+
+										print(f"  Pos: min={pos_min:.2f}, max={pos_max:.2f}, |mean|={pos_mean:.2f}")
+										if n_oob > 0:
+											print(f"  ⚠ {n_oob} values ({pct_oob:.1f}%) OUT OF BOUNDS!")
+					except Exception:
+						pass  # Silently skip if structure is unexpected
 
 				if("metrics" in log_dict.keys()):
 					log_dict_metrics = jax.tree_map(reshape_utils.unravel_dict, log_dict["metrics"])
@@ -757,7 +846,10 @@ class TrainMeanField:
 		save_metrics_at_epoch["eval/rel_error"] = []
 		for iter, (batch_dict) in enumerate(dataloader):
 			gt_normed_energies = batch_dict["energies"]
-			print("batchsize is", len(gt_normed_energies))
+
+			# Compact eval progress (only every 20 batches)
+			if iter % 20 == 0:
+				print(f"  Eval batch {iter}/{len(dataloader)}")
 
 			graph_batch, energy_graph_batch = self._prepare_graphs(batch_dict, mode = mode)
 
@@ -854,7 +946,10 @@ class TrainMeanField:
 
 		for iter, (batch_dict) in enumerate(dataloader):
 			gt_normed_energies = batch_dict["energies"]
-			print("batchsize is", len(gt_normed_energies))
+
+			# Compact eval progress (only every 20 batches)
+			if iter % 20 == 0:
+				print(f"  Eval batch {iter}/{len(dataloader)}")
 
 			graph_batch, energy_graph_batch = self._prepare_graphs(batch_dict, mode = mode)
 
