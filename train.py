@@ -666,7 +666,6 @@ class TrainMeanField:
 
 				# Debug: Check for energy explosion every 10 batches
 				if iter % 10 == 0 and "energies" in log_dict:
-					import numpy as np
 					energies = log_dict["energies"]
 
 					# Extract energy values (handle different structures)
