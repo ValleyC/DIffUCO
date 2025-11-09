@@ -40,6 +40,8 @@ class ChipPlacementEnergyClass(BaseEnergyClass):
         self.continuous_dim = config.get("continuous_dim", 2)
         self.overlap_weight = config.get("overlap_weight", 10.0)
         self.boundary_weight = config.get("boundary_weight", 10.0)
+        self.overlap_threshold = config.get("overlap_threshold", 0.1)
+        self.boundary_threshold = config.get("boundary_threshold", 0.1)
         self.canvas_width = config.get("canvas_width", 2.0)  # Default: [-1, 1] -> width = 2
         self.canvas_height = config.get("canvas_height", 2.0)
         self.canvas_x_min = config.get("canvas_x_min", -1.0)
@@ -56,9 +58,14 @@ class ChipPlacementEnergyClass(BaseEnergyClass):
 
         print("ChipPlacementEnergy initialized")
         print(f"  Continuous dim: {self.continuous_dim}")
-        print(f"  Overlap weight: {self.overlap_weight} (absolute weight, no HPWL coupling)")
-        print(f"  Boundary weight: {self.boundary_weight} (absolute weight, no HPWL coupling)")
-        print(f"  Note: Weights represent absolute penalty importance (decoupled from HPWL)")
+        print(f"  Penalty mode: Normalized quadratic (violation/threshold)^2")
+        print(f"  Overlap: weight={self.overlap_weight}, threshold={self.overlap_threshold}")
+        print(f"  Boundary: weight={self.boundary_weight}, threshold={self.boundary_threshold}")
+        print(f"  Example penalties (overlap with weight={self.overlap_weight}, threshold={self.overlap_threshold}):")
+        print(f"    violation=0.05 → {self.overlap_weight * (0.05/self.overlap_threshold)**2:.2f}")
+        print(f"    violation=0.1  → {self.overlap_weight * (0.1/self.overlap_threshold)**2:.2f}")
+        print(f"    violation=0.5  → {self.overlap_weight * (0.5/self.overlap_threshold)**2:.2f}")
+        print(f"    violation=1.0  → {self.overlap_weight * (1.0/self.overlap_threshold)**2:.2f}")
         print(f"  Canvas: [{self.canvas_x_min}, {self.canvas_x_min + self.canvas_width}] x [{self.canvas_y_min}, {self.canvas_y_min + self.canvas_height}]")
         print(f"\n  Two-Stage Training Configuration:")
         print(f"  Use constraints in training: {self.use_constraints_in_training}")
@@ -131,21 +138,23 @@ class ChipPlacementEnergyClass(BaseEnergyClass):
             positions, component_sizes, node_gr_idx, n_graph
         )
 
-        # FIX: Use raw penalties without HPWL coupling to prevent energy explosion
+        # FIX: Use NORMALIZED QUADRATIC penalties (best of linear and quadratic!)
         # Old approach tried to scale penalties by HPWL, but this created dangerous coupling:
         # - Energy = HPWL + weight × (penalty × HPWL)
         # - This creates quadratic scaling with circuit size (O(N^1.5) for N components)
-        # - For Chip_huge (N=400): HPWL≈5600, boundary≈40 → coupled energy = 2.2M explosion!
         #
-        # New approach: Use raw penalties directly with absolute weights
-        # - Energy = HPWL + weight × penalty
-        # - No coupling, linear scaling with problem size
-        # - Weights now represent absolute importance, not "X times HPWL"
+        # New approach: Normalize then square (like TSP but with explicit threshold)
+        # - Energy = HPWL + weight × (violation/threshold)^2
+        # - Benefits:
+        #   * Tolerates small violations: (0.05/0.1)^2 = 0.25 (cheap)
+        #   * Moderate for medium: (0.5/0.1)^2 = 25 (noticeable)
+        #   * Catastrophic for large: (2.0/0.1)^2 = 400 (prevents!)
+        #   * Gradient grows with severity: ∇ = 2×weight×violation/threshold^2
 
         Energy_per_graph = (
             hpwl_per_graph +
-            self.overlap_weight * overlap_per_graph +
-            self.boundary_weight * boundary_per_graph
+            self.overlap_weight * ((overlap_per_graph / self.overlap_threshold) ** 2) +
+            self.boundary_weight * ((boundary_per_graph / self.boundary_threshold) ** 2)
         )
 
         # Constraint violations (for monitoring)
@@ -508,14 +517,15 @@ class ChipPlacementEnergyClass(BaseEnergyClass):
                 positions, component_sizes, node_gr_idx, n_graph
             )
 
-            # FIX: Use raw penalties without HPWL coupling (same fix as calculate_Energy)
+            # FIX: Use NORMALIZED QUADRATIC penalties (same as calculate_Energy)
             # Old (buggy): normalized_overlap_penalty = overlap_per_graph * hpwl_per_graph
             # Old (buggy): normalized_boundary_penalty = boundary_per_graph * hpwl_per_graph
+            # New: Normalized quadratic penalties (see calculate_Energy for rationale)
 
             Energy_per_graph = (
                 hpwl_per_graph +
-                self.overlap_weight * overlap_per_graph +
-                self.boundary_weight * boundary_per_graph
+                self.overlap_weight * ((overlap_per_graph / self.overlap_threshold) ** 2) +
+                self.boundary_weight * ((boundary_per_graph / self.boundary_threshold) ** 2)
             )
 
             constraint_violations_per_graph = overlap_per_graph + boundary_per_graph
@@ -535,8 +545,9 @@ class ChipPlacementEnergyClass(BaseEnergyClass):
             boundary_per_graph = self._compute_boundary_penalty(
                 positions, component_sizes, node_gr_idx, n_graph
             )
-            # FIX: Use raw boundary penalty without HPWL coupling to prevent explosion
+            # FIX: Use NORMALIZED QUADRATIC boundary penalty (same as constraint mode)
             # Old (buggy): normalized_boundary_penalty = boundary_per_graph * hpwl_per_graph
+            # New: Normalized quadratic penalties (see calculate_Energy for rationale)
 
             # Optionally add minimum distance constraint
             if self.use_min_distance:
@@ -546,14 +557,14 @@ class ChipPlacementEnergyClass(BaseEnergyClass):
                 Energy_per_graph = (
                     hpwl_per_graph +
                     self.spread_weight * spread_penalty_per_graph +
-                    self.boundary_weight * boundary_per_graph +
-                    self.min_distance_weight * min_distance_penalty
+                    self.boundary_weight * ((boundary_per_graph / self.boundary_threshold) ** 2) +
+                    self.min_distance_weight * ((min_distance_penalty / self.min_distance_threshold) ** 2)
                 )
             else:
                 Energy_per_graph = (
                     hpwl_per_graph +
                     self.spread_weight * spread_penalty_per_graph +
-                    self.boundary_weight * boundary_per_graph
+                    self.boundary_weight * ((boundary_per_graph / self.boundary_threshold) ** 2)
                 )
 
             # For monitoring: report spread penalty + boundary as "violations" during training

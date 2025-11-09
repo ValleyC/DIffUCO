@@ -77,12 +77,23 @@ CHIP_PLACEMENT_CONFIG = {
     # ===== Energy Function Settings =====
     # ChipPlacementEnergy parameters
 
-    # CRITICAL: Enable two-stage training to prevent energy explosions
-    "use_constraints_in_training": False,    # Use spread regularization instead of overlap penalties
-    "spread_weight": 0.5,                    # √N-normalized spread penalty (scale-invariant)
+    # Training mode: Full constraint enforcement (overlap + boundary penalties)
+    # FIX: Decoupled energy (no HPWL multiplication) prevents explosions
+    "use_constraints_in_training": True,     # Use full constraints during training
+    "spread_weight": 0.5,                    # √N-normalized spread penalty (only used if constraints=False)
 
-    "overlap_weight": 2000.0,                # Penalty weight for component overlaps (unused with two-stage)
-    "boundary_weight": 2000.0,               # Penalty weight for out-of-bounds (unused with two-stage)
+    # Normalized quadratic penalties (best of both worlds!)
+    "overlap_weight": 50.0,                   # Weight for (overlap/threshold)^2
+    "boundary_weight": 50.0,                  # Weight for (boundary/threshold)^2
+    "overlap_threshold": 0.1,                # Normalization threshold for overlap
+    "boundary_threshold": 0.1,               # Normalization threshold for boundary
+    # Energy = HPWL + weight × (violation/threshold)^2
+    # Examples with weight=1.0, threshold=0.1:
+    #   overlap=0.05 → 1.0×(0.5)^2 = 0.25 (very cheap, tolerable)
+    #   overlap=0.1  → 1.0×(1.0)^2 = 1.0 (cheap)
+    #   overlap=0.5  → 1.0×(5.0)^2 = 25 (strong)
+    #   overlap=1.0  → 1.0×(10)^2 = 100 (very strong)
+    #   overlap=2.0  → 1.0×(20)^2 = 400 (catastrophic!)
     "canvas_width": 2.0,                   # Canvas width (x: [-1, 1])
     "canvas_height": 2.0,                  # Canvas height (y: [-1, 1])
     "canvas_x_min": -1.0,                  # Canvas x minimum
