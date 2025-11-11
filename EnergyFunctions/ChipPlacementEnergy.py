@@ -7,21 +7,21 @@ import jraph
 
 class ChipPlacementEnergyClass(BaseEnergyClass):
     """
-    Energy function for chip placement problems.
+    Energy function for chip placement problems following ChipDiffusion's approach.
 
-    Energy = HPWL + overlap_weight * normalized_overlap + boundary_weight * normalized_boundary
+    Energy = HPWL + overlap_weight * overlap_penalty + boundary_weight * boundary_penalty
 
     Where:
     - HPWL (Half-Perimeter Wirelength): sum of bounding box dimensions for all nets
-    - normalized_overlap: overlap_area * HPWL (scales proportionally with circuit size)
-    - normalized_boundary: boundary_area * HPWL (scales proportionally with circuit size)
+    - overlap_penalty: smooth pairwise overlap penalty (ChipDiffusion formula)
+    - boundary_penalty: quadratic distance penalty for out-of-bounds components
 
-    The normalization ensures that overlap_weight and boundary_weight represent
-    "how many times HPWL when violation=1.0" rather than absolute penalty values.
-    This makes penalties scale naturally with circuit size.
+    Following Lee et al. (ChipDiffusion 2024), we use:
+    - Overlap: h = (ReLU(-l))² / 4 where l is smooth max of component distances
+    - Boundary: h = (ReLU(|x - center| + size/2 - limit))² / 2
 
-    For example, overlap_weight=5.0 means: when overlap_area=1.0, penalty = 5.0 * HPWL.
-    This ensures the same weight values work across different circuit sizes (50 vs 400 components).
+    These formulas provide smooth, differentiable gradients for optimization while
+    effectively penalizing constraint violations.
 
     This replaces MaxCutEnergyClass for continuous chip placement optimization.
     """
@@ -56,16 +56,11 @@ class ChipPlacementEnergyClass(BaseEnergyClass):
         self.min_distance_weight = config.get("min_distance_weight", 0.1)
         self.min_distance_threshold = config.get("min_distance_threshold", 0.2)
 
-        print("ChipPlacementEnergy initialized")
+        print("ChipPlacementEnergy initialized (ChipDiffusion formulas)")
         print(f"  Continuous dim: {self.continuous_dim}")
-        print(f"  Penalty mode: Normalized quadratic (violation/threshold)^2")
-        print(f"  Overlap: weight={self.overlap_weight}, threshold={self.overlap_threshold}")
-        print(f"  Boundary: weight={self.boundary_weight}, threshold={self.boundary_threshold}")
-        print(f"  Example penalties (overlap with weight={self.overlap_weight}, threshold={self.overlap_threshold}):")
-        print(f"    violation=0.05 → {self.overlap_weight * (0.05/self.overlap_threshold)**2:.2f}")
-        print(f"    violation=0.1  → {self.overlap_weight * (0.1/self.overlap_threshold)**2:.2f}")
-        print(f"    violation=0.5  → {self.overlap_weight * (0.5/self.overlap_threshold)**2:.2f}")
-        print(f"    violation=1.0  → {self.overlap_weight * (1.0/self.overlap_threshold)**2:.2f}")
+        print(f"  Penalty mode: ChipDiffusion quadratic penalties")
+        print(f"  - Overlap: h = (ReLU(-l))² / 4, weight={self.overlap_weight}")
+        print(f"  - Boundary: h = (ReLU(violation))² / 2, weight={self.boundary_weight}")
         print(f"  Canvas: [{self.canvas_x_min}, {self.canvas_x_min + self.canvas_width}] x [{self.canvas_y_min}, {self.canvas_y_min + self.canvas_height}]")
         print(f"\n  Two-Stage Training Configuration:")
         print(f"  Use constraints in training: {self.use_constraints_in_training}")
@@ -138,23 +133,18 @@ class ChipPlacementEnergyClass(BaseEnergyClass):
             positions, component_sizes, node_gr_idx, n_graph
         )
 
-        # FIX: Use NORMALIZED QUADRATIC penalties (best of linear and quadratic!)
-        # Old approach tried to scale penalties by HPWL, but this created dangerous coupling:
-        # - Energy = HPWL + weight × (penalty × HPWL)
-        # - This creates quadratic scaling with circuit size (O(N^1.5) for N components)
+        # ChipDiffusion energy formulation: direct weighted penalties
+        # Following Lee et al. (ChipDiffusion), we apply weights directly to the
+        # quadratic penalties computed by the helper functions:
+        # - Overlap: h = (ReLU(-l))² / 4 (already smooth and quadratic)
+        # - Boundary: h = (ReLU(violation))² / 2 (already quadratic)
         #
-        # New approach: Normalize then square (like TSP but with explicit threshold)
-        # - Energy = HPWL + weight × (violation/threshold)^2
-        # - Benefits:
-        #   * Tolerates small violations: (0.05/0.1)^2 = 0.25 (cheap)
-        #   * Moderate for medium: (0.5/0.1)^2 = 25 (noticeable)
-        #   * Catastrophic for large: (2.0/0.1)^2 = 400 (prevents!)
-        #   * Gradient grows with severity: ∇ = 2×weight×violation/threshold^2
+        # The penalties are already scaled appropriately, so we just apply weights.
 
         Energy_per_graph = (
             hpwl_per_graph +
-            self.overlap_weight * ((overlap_per_graph / self.overlap_threshold) ** 2) +
-            self.boundary_weight * ((boundary_per_graph / self.boundary_threshold) ** 2)
+            self.overlap_weight * overlap_per_graph +
+            self.boundary_weight * boundary_per_graph
         )
 
         # Constraint violations (for monitoring)
@@ -215,12 +205,17 @@ class ChipPlacementEnergyClass(BaseEnergyClass):
         return hpwl_per_graph
 
     @partial(jax.jit, static_argnums=(0, 4))
-    def _compute_overlap_penalty(self, positions, component_sizes, node_gr_idx, n_graph):
+    def _compute_overlap_penalty(self, positions, component_sizes, node_gr_idx, n_graph, softmax_factor=10.0):
         """
-        Compute overlap penalty between components.
+        Compute overlap penalty between components following ChipDiffusion's approach.
 
-        For each pair of components, check if their bounding boxes overlap.
-        Penalty = sum of overlap areas.
+        Following Lee et al. (ChipDiffusion), we use smooth pairwise overlap penalties:
+        delta = |x_1 - x_2| - (size_1 + size_2)/2  # Distance between bounding boxes
+        l = sum(softmax(delta) * delta)  # Smooth max approximation
+        h = (ReLU(-l))² / 4  # Quadratic penalty when overlapping
+
+        The softmax provides a smooth, differentiable approximation to max(delta_x, delta_y).
+        Weighted by geometric mean of component masses for balanced force distribution.
 
         Note: This is O(n^2) per graph, which can be expensive for large designs.
         For production, consider spatial hashing or other acceleration.
@@ -230,44 +225,40 @@ class ChipPlacementEnergyClass(BaseEnergyClass):
             component_sizes: component sizes [num_components, 2] (width, height)
             node_gr_idx: component to graph mapping
             n_graph: number of graphs
+            softmax_factor: temperature for smooth max approximation (default: 10.0)
 
         Returns:
-            overlap_per_graph: total overlap area per graph [n_graphs,]
+            overlap_per_graph: total overlap penalty per graph [n_graphs,]
         """
         num_components = positions.shape[0]
 
-        # Component bounding boxes: [x_min, y_min, x_max, y_max]
-        # Position is center of component
-        half_sizes = component_sizes / 2.0
-        x_min = positions[:, 0] - half_sizes[:, 0]
-        y_min = positions[:, 1] - half_sizes[:, 1]
-        x_max = positions[:, 0] + half_sizes[:, 0]
-        y_max = positions[:, 1] + half_sizes[:, 1]
+        # Expand dimensions for pairwise computation
+        positions_i = positions[:, jnp.newaxis, :]  # [N, 1, 2]
+        positions_j = positions[jnp.newaxis, :, :]  # [1, N, 2]
+        sizes_i = component_sizes[:, jnp.newaxis, :]  # [N, 1, 2]
+        sizes_j = component_sizes[jnp.newaxis, :, :]  # [1, N, 2]
 
-        # Pairwise overlap computation (vectorized)
-        # For components i and j, overlap exists if:
-        # x_min[i] < x_max[j] AND x_max[i] > x_min[j] AND y_min[i] < y_max[j] AND y_max[i] > y_min[j]
+        # ChipDiffusion formula: delta = |x_1 - x_2| - (size_1 + size_2)/2
+        # This is the distance between bounding boxes (negative when overlapping)
+        delta = jnp.abs(positions_i - positions_j) - (sizes_i + sizes_j) / 2.0  # [N, N, 2]
 
-        # Expand dimensions for broadcasting
-        x_min_i = x_min[:, jnp.newaxis]  # [num_components, 1]
-        x_max_i = x_max[:, jnp.newaxis]
-        y_min_i = y_min[:, jnp.newaxis]
-        y_max_i = y_max[:, jnp.newaxis]
+        # Smooth max approximation using softmax: l = sum(softmax(delta) * delta)
+        # This approximates max(delta_x, delta_y) smoothly
+        softmax_weights = jax.nn.softmax(delta * softmax_factor, axis=-1)  # [N, N, 2]
+        l = jnp.sum(softmax_weights * delta, axis=-1)  # [N, N]
 
-        x_min_j = x_min[jnp.newaxis, :]  # [1, num_components]
-        x_max_j = x_max[jnp.newaxis, :]
-        y_min_j = y_min[jnp.newaxis, :]
-        y_max_j = y_max[jnp.newaxis, :]
+        # Quadratic penalty: h = (ReLU(-l))² / 4
+        # When l < 0 (components overlap), this creates a penalty
+        h = (jnp.maximum(0.0, -l) ** 2) / 4.0  # [N, N]
 
-        # Overlap widths and heights (0 if no overlap)
-        overlap_width = jnp.maximum(0.0, jnp.minimum(x_max_i, x_max_j) - jnp.maximum(x_min_i, x_min_j))
-        overlap_height = jnp.maximum(0.0, jnp.minimum(y_max_i, y_max_j) - jnp.maximum(y_min_i, y_min_j))
-
-        # Overlap area per pair
-        overlap_area = overlap_width * overlap_height  # [num_components, num_components]
+        # Weight by geometric mean of component masses (as in ChipDiffusion)
+        # mass = geometric mean of component dimensions
+        mass_i = jnp.exp(jnp.mean(jnp.log(sizes_i + 1e-8), axis=-1))  # [N, 1]
+        mass_j = jnp.exp(jnp.mean(jnp.log(sizes_j + 1e-8), axis=-1))  # [1, N]
+        mass_weight = mass_j / (mass_i + mass_j + 1e-8)  # [N, N]
+        h_weighted = h * mass_weight  # [N, N]
 
         # Only count each pair once (upper triangle, excluding diagonal)
-        # Create mask: 1 for i < j, 0 otherwise
         i_indices = jnp.arange(num_components)[:, jnp.newaxis]
         j_indices = jnp.arange(num_components)[jnp.newaxis, :]
         upper_triangle_mask = (i_indices < j_indices).astype(jnp.float32)
@@ -279,12 +270,10 @@ class ChipPlacementEnergyClass(BaseEnergyClass):
         valid_pairs_mask = upper_triangle_mask * same_graph_mask
 
         # Apply mask
-        overlap_area_masked = overlap_area * valid_pairs_mask
+        h_masked = h_weighted * valid_pairs_mask
 
-        # Sum over all pairs and aggregate per graph
-        # For each component i, sum overlaps where it's involved, then aggregate to graph
-        overlap_per_component = jnp.sum(overlap_area_masked, axis=1)  # [num_components,]
-
+        # Sum over all pairs per component, then aggregate to graph
+        overlap_per_component = jnp.sum(h_masked, axis=1)  # [N,]
         overlap_per_graph = jax.ops.segment_sum(overlap_per_component, node_gr_idx, n_graph)
 
         return overlap_per_graph
@@ -292,9 +281,12 @@ class ChipPlacementEnergyClass(BaseEnergyClass):
     @partial(jax.jit, static_argnums=(0, 4))
     def _compute_boundary_penalty(self, positions, component_sizes, node_gr_idx, n_graph):
         """
-        Compute boundary violation penalty.
+        Compute boundary violation penalty following ChipDiffusion's approach.
 
-        Penalty = sum of out-of-bounds areas (how much component extends beyond canvas).
+        Following Lee et al. (ChipDiffusion), we use quadratic boundary penalties:
+        h_bound = (ReLU(|x - center| + size/2 - limit))² / 2
+
+        For canvas [x_min, x_max], this penalizes when component edges exceed bounds.
 
         Args:
             positions: component positions [num_components, 2]
@@ -303,36 +295,34 @@ class ChipPlacementEnergyClass(BaseEnergyClass):
             n_graph: number of graphs
 
         Returns:
-            boundary_penalty_per_graph: total out-of-bounds area per graph [n_graphs,]
+            boundary_penalty_per_graph: total boundary penalty per graph [n_graphs,]
         """
-        # Component bounding boxes
-        half_sizes = component_sizes / 2.0
-        x_min = positions[:, 0] - half_sizes[:, 0]
-        y_min = positions[:, 1] - half_sizes[:, 1]
-        x_max = positions[:, 0] + half_sizes[:, 0]
-        y_max = positions[:, 1] + half_sizes[:, 1]
-
-        # Canvas boundaries
+        # Canvas boundaries and center
         canvas_x_max = self.canvas_x_min + self.canvas_width
         canvas_y_max = self.canvas_y_min + self.canvas_height
+        canvas_center_x = (self.canvas_x_min + canvas_x_max) / 2.0
+        canvas_center_y = (self.canvas_y_min + canvas_y_max) / 2.0
+        canvas_half_width = self.canvas_width / 2.0
+        canvas_half_height = self.canvas_height / 2.0
 
-        # Out-of-bounds distances (0 if within bounds)
-        left_violation = jnp.maximum(0.0, self.canvas_x_min - x_min)
-        right_violation = jnp.maximum(0.0, x_max - canvas_x_max)
-        bottom_violation = jnp.maximum(0.0, self.canvas_y_min - y_min)
-        top_violation = jnp.maximum(0.0, y_max - canvas_y_max)
+        # Distance from canvas center
+        dist_from_center_x = jnp.abs(positions[:, 0] - canvas_center_x)
+        dist_from_center_y = jnp.abs(positions[:, 1] - canvas_center_y)
 
-        # Approximate out-of-bounds "area" as sum of violations weighted by component dimension
-        # This gives a differentiable penalty proportional to severity
-        x_violation = (left_violation + right_violation) * component_sizes[:, 1]  # width violation * height
-        y_violation = (bottom_violation + top_violation) * component_sizes[:, 0]  # height violation * width
+        # Half sizes of components
+        half_sizes = component_sizes / 2.0
 
-        # Total boundary violation per component
-        boundary_violation_per_component = x_violation + y_violation
+        # ChipDiffusion formula: (ReLU(|x - center| + size/2 - canvas_limit))² / 2
+        # Component violates boundary when: |x - center| + size/2 > canvas_half_width
+        violation_x = jnp.maximum(0.0, dist_from_center_x + half_sizes[:, 0] - canvas_half_width)
+        violation_y = jnp.maximum(0.0, dist_from_center_y + half_sizes[:, 1] - canvas_half_height)
+
+        # Quadratic penalty per component (sum over both dimensions)
+        boundary_penalty_per_component = ((violation_x ** 2) + (violation_y ** 2)) / 2.0
 
         # Aggregate to graph level
         boundary_penalty_per_graph = jax.ops.segment_sum(
-            boundary_violation_per_component, node_gr_idx, n_graph
+            boundary_penalty_per_component, node_gr_idx, n_graph
         )
 
         return boundary_penalty_per_graph
