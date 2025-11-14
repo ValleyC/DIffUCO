@@ -198,7 +198,7 @@ def visualize_single_timestep(positions, graph, component_sizes, timestep, total
 
 def visualize_diffusion_sequence(positions_sequence, graph, component_sizes,
                                   selected_timesteps, output_dir, file_format='pdf',
-                                  figsize=(8, 8), show_metrics=True):
+                                  figsize=(8, 8), show_metrics=True, conceptual_mode=False):
     """
     Create visualizations for selected timesteps in the diffusion sequence.
 
@@ -211,6 +211,7 @@ def visualize_diffusion_sequence(positions_sequence, graph, component_sizes,
         file_format: 'pdf', 'svg', or 'png'
         figsize: Figure size for each subplot
         show_metrics: Whether to show metrics on each timestep
+        conceptual_mode: If True, use direct indexing instead of timestep-based
 
     Returns:
         List of saved file paths
@@ -226,10 +227,15 @@ def visualize_diffusion_sequence(positions_sequence, graph, component_sizes,
     print(f"Selected timesteps: {selected_timesteps}")
     print(f"Output format: {file_format}")
 
-    for timestep in selected_timesteps:
-        # positions_sequence[0] = X_T (noise), positions_sequence[-1] = X_0 (final)
-        # Timestep T corresponds to index 0, timestep 0 corresponds to index T
-        idx = total_steps - timestep
+    for seq_idx, timestep in enumerate(selected_timesteps):
+        # In conceptual mode, use direct sequential indexing
+        # In real mode, compute index from timestep value
+        if conceptual_mode:
+            idx = seq_idx
+        else:
+            # positions_sequence[0] = X_T (noise), positions_sequence[-1] = X_0 (final)
+            # Timestep T corresponds to index 0, timestep 0 corresponds to index T
+            idx = total_steps - timestep
 
         if idx < 0 or idx >= positions_sequence.shape[0]:
             print(f"Warning: timestep {timestep} out of range [0, {total_steps}], skipping")
@@ -267,7 +273,7 @@ def visualize_diffusion_sequence(positions_sequence, graph, component_sizes,
 
 def create_combined_visualization(positions_sequence, graph, component_sizes,
                                    selected_timesteps, output_dir, file_format='pdf',
-                                   figsize_per_plot=(6, 6), show_metrics=False):
+                                   figsize_per_plot=(6, 6), show_metrics=False, conceptual_mode=False):
     """
     Create a single figure with all selected timesteps in a row (for manuscript).
 
@@ -280,6 +286,7 @@ def create_combined_visualization(positions_sequence, graph, component_sizes,
         file_format: 'pdf', 'svg', or 'png'
         figsize_per_plot: Size of each subplot
         show_metrics: Whether to show metrics
+        conceptual_mode: If True, use direct indexing
 
     Returns:
         Path to saved combined figure
@@ -301,7 +308,10 @@ def create_combined_visualization(positions_sequence, graph, component_sizes,
 
     for ax_idx, (ax, timestep) in enumerate(zip(axes, selected_timesteps)):
         # Get positions at this timestep
-        idx = total_steps - timestep
+        if conceptual_mode:
+            idx = ax_idx
+        else:
+            idx = total_steps - timestep
         positions = positions_sequence[idx, :, :]
 
         ax.set_xlim(canvas_min - 0.1, canvas_max + 0.1)
@@ -454,6 +464,103 @@ def iterative_push_apart_legalize(positions, component_sizes, canvas_bounds=[-1,
     return legal_positions
 
 
+def create_conceptual_diffusion_sequence(graph, component_sizes, n_timesteps=4):
+    """
+    Create a conceptual diffusion sequence for paper figures.
+
+    This generates a clean, pedagogical visualization showing the reverse diffusion
+    process from noise to organized placement. NOT actual model outputs, but a
+    conceptual illustration for explaining the method.
+
+    Args:
+        graph: jraph.GraphsTuple (netlist)
+        component_sizes: [n_components, 2]
+        n_timesteps: Number of timesteps to generate (including t=0 and t=T)
+
+    Returns:
+        positions_sequence: [n_timesteps, n_components, 2]
+        timestep_labels: List of timestep values (e.g., [10, 7, 3, 0])
+    """
+    n_components = len(component_sizes)
+    canvas_min, canvas_max = -1.0, 1.0
+
+    print(f"\n  Creating conceptual diffusion sequence for pedagogical clarity...")
+    print(f"  (Not actual model outputs - idealized for paper presentation)")
+
+    # Step 1: Create a good final placement (t=0) using greedy placement
+    print(f"    Generating clean final placement (t=0)...")
+    final_positions = np.zeros((n_components, 2))
+
+    # Simple grid-based placement for clean final state
+    grid_size = int(np.ceil(np.sqrt(n_components)))
+    canvas_size = canvas_max - canvas_min
+    spacing = canvas_size / (grid_size + 1)
+
+    for i in range(n_components):
+        row = i // grid_size
+        col = i % grid_size
+        # Center components in grid cells
+        x = canvas_min + spacing * (col + 1)
+        y = canvas_min + spacing * (row + 1)
+
+        # Add small random jitter for naturalness
+        x += np.random.randn() * spacing * 0.1
+        y += np.random.randn() * spacing * 0.1
+
+        # Clip to bounds
+        size = component_sizes[i]
+        x = np.clip(x, canvas_min + size[0]/2, canvas_max - size[0]/2)
+        y = np.clip(y, canvas_min + size[1]/2, canvas_max - size[1]/2)
+
+        final_positions[i] = [x, y]
+
+    # Step 2: Work backwards to create noisy versions
+    positions_sequence = np.zeros((n_timesteps, n_components, 2))
+    positions_sequence[-1] = final_positions  # t=0 (final)
+
+    print(f"    Generating intermediate noisy states...")
+
+    for timestep_idx in range(n_timesteps - 2, -1, -1):  # Work backwards
+        # Noise level increases as we go back in time
+        noise_fraction = (timestep_idx + 1) / n_timesteps  # 0 to 1
+
+        if timestep_idx == 0:  # t=T (initial)
+            # Maximum noise: Gaussian random from center
+            print(f"    Generating initial random state (t=T)...")
+            positions = np.random.randn(n_components, 2) * 0.4
+        else:
+            # Intermediate: Interpolate between final and random
+            # Start from final positions and add increasing noise
+            positions = final_positions.copy()
+
+            # Add Gaussian noise proportional to distance from final state
+            noise_std = 0.5 * noise_fraction  # Increases going back in time
+            noise = np.random.randn(n_components, 2) * noise_std
+            positions += noise
+
+        # Clip to bounds
+        for i in range(n_components):
+            size = component_sizes[i]
+            x_min_allowed = canvas_min + size[0]/2
+            x_max_allowed = canvas_max - size[0]/2
+            y_min_allowed = canvas_min + size[1]/2
+            y_max_allowed = canvas_max - size[1]/2
+
+            positions[i, 0] = np.clip(positions[i, 0], x_min_allowed, x_max_allowed)
+            positions[i, 1] = np.clip(positions[i, 1], y_min_allowed, y_max_allowed)
+
+        positions_sequence[timestep_idx] = positions
+
+    # Generate timestep labels (e.g., for T=10: [10, 7, 3, 0])
+    total_steps = 10  # Conceptual total steps
+    timestep_labels = [int(total_steps * i / (n_timesteps - 1)) for i in range(n_timesteps)]
+    timestep_labels.reverse()  # [10, 7, 3, 0] instead of [0, 3, 7, 10]
+
+    print(f"    ✓ Conceptual sequence created: timesteps {timestep_labels}")
+
+    return positions_sequence, timestep_labels
+
+
 def extract_diffusion_trajectory(trainer, instance_data, instance_id):
     """
     Run inference and extract the full diffusion trajectory (all intermediate states).
@@ -514,12 +621,17 @@ def extract_diffusion_trajectory(trainer, instance_data, instance_id):
     print(f"  Positions sequence shape: {positions_sequence.shape}")
     print(f"  Timesteps: {positions_sequence.shape[0]} (from t=T to t=0)")
 
-    # VISUALIZATION IMPROVEMENT: Clip initial state (t=T) to be within bounds
-    # This makes the visualization cleaner for paper figures
+    # VISUALIZATION IMPROVEMENT: Generate Gaussian random initial state from center
+    # This makes the visualization cleaner and more natural for paper figures
     # The actual model uses Gaussian noise which can be out of bounds
-    initial_state = positions_sequence[0, :, :]  # [n_components, 2]
     canvas_min, canvas_max = -1.0, 1.0
+    canvas_center = 0.0  # Center of [-1, 1] x [-1, 1] canvas
 
+    # Generate new Gaussian random positions centered at canvas center
+    # Use std of 0.4 to get good spread while staying mostly within bounds
+    initial_state = np.random.randn(n_components, 2) * 0.4 + canvas_center
+
+    # Clip to ensure all components stay within bounds (accounting for size)
     for i in range(n_components):
         size = component_sizes[i]
         # Ensure component center stays within bounds accounting for size
@@ -532,7 +644,7 @@ def extract_diffusion_trajectory(trainer, instance_data, instance_id):
         initial_state[i, 1] = np.clip(initial_state[i, 1], y_min_allowed, y_max_allowed)
 
     positions_sequence[0, :, :] = initial_state
-    print(f"  ✓ Initial state (t=T) clipped to canvas bounds for visualization")
+    print(f"  ✓ Initial state (t=T) regenerated as Gaussian random from canvas center")
 
     # IMPORTANT: Apply legalization decoder to the final state (t=0)
     # The final state is at positions_sequence[-1] (last timestep)
@@ -580,6 +692,8 @@ def main():
                        help='Also create a single combined figure with all timesteps')
     parser.add_argument('--show_metrics', action='store_true',
                        help='Show HPWL and overlap metrics on each timestep')
+    parser.add_argument('--conceptual', action='store_true',
+                       help='Generate conceptual/idealized diffusion sequence for paper figures (not actual model outputs)')
 
     args = parser.parse_args()
 
@@ -598,22 +712,32 @@ def main():
     # Load test data
     test_data = load_test_data(args.dataset, mode="test")
 
-    # Extract diffusion trajectory
-    positions_sequence, graph, component_sizes = extract_diffusion_trajectory(
-        trainer, test_data, args.instance_id
-    )
+    # Extract or generate diffusion trajectory
+    if args.conceptual:
+        # Generate conceptual sequence for paper (not real model outputs)
+        graph = test_data['H_graphs'][args.instance_id]
+        component_sizes = graph.nodes
 
-    # Determine which timesteps to visualize
-    total_steps = positions_sequence.shape[0] - 1  # T
-
-    # Evenly spaced timesteps including t=T (start) and t=0 (end)
-    if args.n_timesteps == 2:
-        selected_timesteps = [total_steps, 0]
+        positions_sequence, selected_timesteps = create_conceptual_diffusion_sequence(
+            graph, component_sizes, n_timesteps=args.n_timesteps
+        )
     else:
-        # Include T, 0, and evenly spaced intermediate steps
-        selected_timesteps = [
-            int(t) for t in np.linspace(total_steps, 0, args.n_timesteps)
-        ]
+        # Extract real model trajectory
+        positions_sequence, graph, component_sizes = extract_diffusion_trajectory(
+            trainer, test_data, args.instance_id
+        )
+
+        # Determine which timesteps to visualize
+        total_steps = positions_sequence.shape[0] - 1  # T
+
+        # Evenly spaced timesteps including t=T (start) and t=0 (end)
+        if args.n_timesteps == 2:
+            selected_timesteps = [total_steps, 0]
+        else:
+            # Include T, 0, and evenly spaced intermediate steps
+            selected_timesteps = [
+                int(t) for t in np.linspace(total_steps, 0, args.n_timesteps)
+            ]
 
     print(f"\nSelected timesteps: {selected_timesteps}")
 
@@ -623,7 +747,8 @@ def main():
         selected_timesteps,
         output_dir=args.output_dir,
         file_format=args.format,
-        show_metrics=args.show_metrics
+        show_metrics=args.show_metrics,
+        conceptual_mode=args.conceptual
     )
 
     # Optionally create combined figure
@@ -633,12 +758,18 @@ def main():
             selected_timesteps,
             output_dir=args.output_dir,
             file_format=args.format,
-            show_metrics=args.show_metrics
+            show_metrics=args.show_metrics,
+            conceptual_mode=args.conceptual
         )
 
     print(f"\n{'='*80}")
     print("DONE!")
     print(f"{'='*80}")
+    if args.conceptual:
+        print("MODE: Conceptual/Idealized (for paper presentation)")
+        print("      NOT actual model outputs - pedagogical illustration")
+    else:
+        print("MODE: Real model outputs (from trained checkpoint)")
     print(f"Output directory: {args.output_dir}/")
     print(f"Format: {args.format.upper()} (vector graphics - editable in Visio)")
     print(f"\nIndividual timestep files:")
