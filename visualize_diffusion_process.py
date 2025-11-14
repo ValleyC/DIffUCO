@@ -174,15 +174,15 @@ def visualize_single_timestep(positions, graph, component_sizes, timestep, total
     )
     ax.add_patch(canvas_rect)
 
-    # Draw nets first (in background)
-    senders = graph.senders
-    receivers = graph.receivers
-
-    for sender, receiver in zip(senders, receivers):
-        x1, y1 = positions[sender]
-        x2, y2 = positions[receiver]
-        ax.plot([x1, x2], [y1, y2],
-               color='gray', alpha=0.3, linewidth=0.8, zorder=1)
+    # Netlist drawing disabled for cleaner paper figures
+    # (Uncomment if you need to show connectivity)
+    # senders = graph.senders
+    # receivers = graph.receivers
+    # for sender, receiver in zip(senders, receivers):
+    #     x1, y1 = positions[sender]
+    #     x2, y2 = positions[receiver]
+    #     ax.plot([x1, x2], [y1, y2],
+    #            color='gray', alpha=0.3, linewidth=0.8, zorder=1)
 
     # Draw components
     n_components = positions.shape[0]
@@ -363,15 +363,15 @@ def create_combined_visualization(positions_sequence, graph, component_sizes,
         )
         ax.add_patch(canvas_rect)
 
-        # Draw nets
-        senders = graph.senders
-        receivers = graph.receivers
-
-        for sender, receiver in zip(senders, receivers):
-            x1, y1 = positions[sender]
-            x2, y2 = positions[receiver]
-            ax.plot([x1, x2], [y1, y2],
-                   color='gray', alpha=0.25, linewidth=0.6, zorder=0)
+        # Netlist drawing disabled for cleaner paper figures
+        # (Uncomment if you need to show connectivity)
+        # senders = graph.senders
+        # receivers = graph.receivers
+        # for sender, receiver in zip(senders, receivers):
+        #     x1, y1 = positions[sender]
+        #     x2, y2 = positions[receiver]
+        #     ax.plot([x1, x2], [y1, y2],
+        #            color='gray', alpha=0.25, linewidth=0.6, zorder=0)
 
         # Draw components
         n_components = positions.shape[0]
