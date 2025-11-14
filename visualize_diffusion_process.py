@@ -514,6 +514,26 @@ def extract_diffusion_trajectory(trainer, instance_data, instance_id):
     print(f"  Positions sequence shape: {positions_sequence.shape}")
     print(f"  Timesteps: {positions_sequence.shape[0]} (from t=T to t=0)")
 
+    # VISUALIZATION IMPROVEMENT: Clip initial state (t=T) to be within bounds
+    # This makes the visualization cleaner for paper figures
+    # The actual model uses Gaussian noise which can be out of bounds
+    initial_state = positions_sequence[0, :, :]  # [n_components, 2]
+    canvas_min, canvas_max = -1.0, 1.0
+
+    for i in range(n_components):
+        size = component_sizes[i]
+        # Ensure component center stays within bounds accounting for size
+        x_min_allowed = canvas_min + size[0]/2
+        x_max_allowed = canvas_max - size[0]/2
+        y_min_allowed = canvas_min + size[1]/2
+        y_max_allowed = canvas_max - size[1]/2
+
+        initial_state[i, 0] = np.clip(initial_state[i, 0], x_min_allowed, x_max_allowed)
+        initial_state[i, 1] = np.clip(initial_state[i, 1], y_min_allowed, y_max_allowed)
+
+    positions_sequence[0, :, :] = initial_state
+    print(f"  ✓ Initial state (t=T) clipped to canvas bounds for visualization")
+
     # IMPORTANT: Apply legalization decoder to the final state (t=0)
     # The final state is at positions_sequence[-1] (last timestep)
     raw_final_state = positions_sequence[-1, :, :]  # [n_components, 2]
