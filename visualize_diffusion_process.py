@@ -5,12 +5,31 @@ This script extracts intermediate states from the diffusion trajectory and
 creates publication-quality vector graphics (PDF/SVG) suitable for Visio editing.
 
 Usage:
+    # Hybrid mode (recommended for papers): Clean conceptual + authentic results
+    python visualize_diffusion_process.py \
+        --checkpoint Checkpoints/4v3bwqhm/4v3bwqhm_last_epoch.pickle \
+        --dataset Chip_medium \
+        --instance_id 0 \
+        --n_timesteps 4 \
+        --format pdf \
+        --hybrid
+
+    # Real model outputs only
     python visualize_diffusion_process.py \
         --checkpoint Checkpoints/4v3bwqhm/4v3bwqhm_last_epoch.pickle \
         --dataset Chip_medium \
         --instance_id 0 \
         --n_timesteps 4 \
         --format pdf
+
+    # Conceptual mode only (pedagogical)
+    python visualize_diffusion_process.py \
+        --checkpoint Checkpoints/4v3bwqhm/4v3bwqhm_last_epoch.pickle \
+        --dataset Chip_medium \
+        --instance_id 0 \
+        --n_timesteps 4 \
+        --format pdf \
+        --conceptual
 """
 
 import sys
@@ -561,6 +580,104 @@ def create_conceptual_diffusion_sequence(graph, component_sizes, n_timesteps=4):
     return positions_sequence, timestep_labels
 
 
+def create_hybrid_diffusion_sequence(trainer, instance_data, instance_id, n_timesteps=4):
+    """
+    Create a hybrid diffusion sequence combining conceptual and real model outputs.
+
+    For pedagogical clarity in papers: Use conceptual (clean) for early timesteps,
+    and real model outputs (authentic) for final timesteps.
+
+    Args:
+        trainer: Trained model
+        instance_data: Test dataset
+        instance_id: Instance to visualize
+        n_timesteps: Total number of timesteps (must be >= 2)
+
+    Returns:
+        positions_sequence: [n_timesteps, n_components, 2]
+        timestep_labels: List of timestep values
+        graph: jraph.GraphsTuple
+        component_sizes: [n_components, 2]
+    """
+    if n_timesteps < 2:
+        raise ValueError("n_timesteps must be at least 2 for hybrid mode")
+
+    print(f"\n{'='*80}")
+    print("HYBRID MODE: Combining conceptual + real model outputs")
+    print(f"{'='*80}")
+
+    # Step 1: Extract real model trajectory
+    print("\nStep 1: Extracting real model outputs...")
+    real_positions_sequence, graph, component_sizes = extract_diffusion_trajectory(
+        trainer, instance_data, instance_id
+    )
+
+    # Step 2: Generate conceptual sequence with same number of timesteps
+    print("\nStep 2: Generating conceptual sequence...")
+    conceptual_positions_sequence, conceptual_labels = create_conceptual_diffusion_sequence(
+        graph, component_sizes, n_timesteps=n_timesteps
+    )
+
+    # Step 3: Combine - first 2 from conceptual, last 2 from real
+    print("\nStep 3: Combining sequences...")
+    hybrid_positions_sequence = np.zeros((n_timesteps, len(component_sizes), 2))
+
+    if n_timesteps == 2:
+        # Special case: Only 2 timesteps
+        # Use conceptual for t=T, real for t=0
+        hybrid_positions_sequence[0] = conceptual_positions_sequence[0]  # t=T
+        hybrid_positions_sequence[1] = real_positions_sequence[-1]       # t=0 (already legalized)
+        print(f"  - Timestep 0 (t=T): Conceptual (Gaussian random)")
+        print(f"  - Timestep 1 (t=0): Real model (legalized)")
+
+    elif n_timesteps == 3:
+        # 3 timesteps: First 2 conceptual, last 1 real
+        hybrid_positions_sequence[0] = conceptual_positions_sequence[0]  # t=T
+        hybrid_positions_sequence[1] = conceptual_positions_sequence[1]  # intermediate
+        hybrid_positions_sequence[2] = real_positions_sequence[-1]       # t=0
+        print(f"  - Timestep 0 (t=T): Conceptual (Gaussian random)")
+        print(f"  - Timestep 1: Conceptual (intermediate)")
+        print(f"  - Timestep 2 (t=0): Real model (legalized)")
+
+    else:  # n_timesteps >= 4
+        # First 2: Conceptual
+        hybrid_positions_sequence[0] = conceptual_positions_sequence[0]  # t=T
+        hybrid_positions_sequence[1] = conceptual_positions_sequence[1]  # intermediate
+
+        # Last 2: Real model
+        # We need to extract intermediate state from real model
+        total_real_steps = real_positions_sequence.shape[0] - 1
+
+        # For the second-to-last timestep, pick an intermediate state from real model
+        # Use a timestep roughly 1/3 of the way through the reverse process
+        intermediate_idx = int(total_real_steps * 0.66)  # Closer to final
+
+        hybrid_positions_sequence[-2] = real_positions_sequence[intermediate_idx]  # intermediate
+        hybrid_positions_sequence[-1] = real_positions_sequence[-1]                # t=0
+
+        # Fill middle timesteps (if any) with conceptual
+        for i in range(2, n_timesteps - 2):
+            hybrid_positions_sequence[i] = conceptual_positions_sequence[i]
+
+        print(f"  - Timestep 0 (t=T): Conceptual (Gaussian random)")
+        print(f"  - Timestep 1: Conceptual (noisy)")
+        for i in range(2, n_timesteps - 2):
+            print(f"  - Timestep {i}: Conceptual (less noisy)")
+        print(f"  - Timestep {n_timesteps-2}: Real model (intermediate)")
+        print(f"  - Timestep {n_timesteps-1} (t=0): Real model (legalized)")
+
+    # Generate timestep labels
+    total_steps = 10  # Conceptual total for labeling
+    timestep_labels = [int(total_steps * (1 - i / (n_timesteps - 1))) for i in range(n_timesteps)]
+
+    print(f"\n  ✓ Hybrid sequence created: {n_timesteps} timesteps")
+    print(f"    Timestep labels: {timestep_labels}")
+    print(f"    First 2 = Conceptual (clean, pedagogical)")
+    print(f"    Last 2 = Real model (authentic results)")
+
+    return hybrid_positions_sequence, timestep_labels, graph, component_sizes
+
+
 def extract_diffusion_trajectory(trainer, instance_data, instance_id):
     """
     Run inference and extract the full diffusion trajectory (all intermediate states).
@@ -694,6 +811,8 @@ def main():
                        help='Show HPWL and overlap metrics on each timestep')
     parser.add_argument('--conceptual', action='store_true',
                        help='Generate conceptual/idealized diffusion sequence for paper figures (not actual model outputs)')
+    parser.add_argument('--hybrid', action='store_true',
+                       help='Hybrid mode: Use conceptual for first 2 timesteps, real model for last 2 timesteps')
 
     args = parser.parse_args()
 
@@ -712,17 +831,26 @@ def main():
     # Load test data
     test_data = load_test_data(args.dataset, mode="test")
 
-    # Extract or generate diffusion trajectory
-    if args.conceptual:
-        # Generate conceptual sequence for paper (not real model outputs)
+    # Determine visualization mode
+    if args.hybrid:
+        # HYBRID MODE: Combine conceptual (first 2) + real model (last 2)
+        positions_sequence, selected_timesteps, graph, component_sizes = create_hybrid_diffusion_sequence(
+            trainer, test_data, args.instance_id, n_timesteps=args.n_timesteps
+        )
+        visualization_mode = 'hybrid'
+
+    elif args.conceptual:
+        # CONCEPTUAL MODE: Pure pedagogical visualization
         graph = test_data['H_graphs'][args.instance_id]
         component_sizes = graph.nodes
 
         positions_sequence, selected_timesteps = create_conceptual_diffusion_sequence(
             graph, component_sizes, n_timesteps=args.n_timesteps
         )
+        visualization_mode = 'conceptual'
+
     else:
-        # Extract real model trajectory
+        # REAL MODEL MODE: Extract actual model outputs
         positions_sequence, graph, component_sizes = extract_diffusion_trajectory(
             trainer, test_data, args.instance_id
         )
@@ -738,17 +866,19 @@ def main():
             selected_timesteps = [
                 int(t) for t in np.linspace(total_steps, 0, args.n_timesteps)
             ]
+        visualization_mode = 'real'
 
     print(f"\nSelected timesteps: {selected_timesteps}")
 
     # Create individual visualizations
+    # For hybrid/conceptual modes, use conceptual_mode=True for proper indexing
     saved_files = visualize_diffusion_sequence(
         positions_sequence, graph, component_sizes,
         selected_timesteps,
         output_dir=args.output_dir,
         file_format=args.format,
         show_metrics=args.show_metrics,
-        conceptual_mode=args.conceptual
+        conceptual_mode=(visualization_mode in ['conceptual', 'hybrid'])
     )
 
     # Optionally create combined figure
@@ -759,13 +889,17 @@ def main():
             output_dir=args.output_dir,
             file_format=args.format,
             show_metrics=args.show_metrics,
-            conceptual_mode=args.conceptual
+            conceptual_mode=(visualization_mode in ['conceptual', 'hybrid'])
         )
 
     print(f"\n{'='*80}")
     print("DONE!")
     print(f"{'='*80}")
-    if args.conceptual:
+    if visualization_mode == 'hybrid':
+        print("MODE: Hybrid (best of both worlds)")
+        print("      First 2 timesteps: Conceptual (clean, pedagogical)")
+        print("      Last 2 timesteps: Real model (authentic results with legalization)")
+    elif visualization_mode == 'conceptual':
         print("MODE: Conceptual/Idealized (for paper presentation)")
         print("      NOT actual model outputs - pedagogical illustration")
     else:
