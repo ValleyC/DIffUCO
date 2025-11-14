@@ -235,7 +235,7 @@ def visualize_diffusion_sequence(positions_sequence, graph, component_sizes,
             print(f"Warning: timestep {timestep} out of range [0, {total_steps}], skipping")
             continue
 
-        positions = positions_sequence[idx, :, :, 0]  # [n_components, 2]
+        positions = positions_sequence[idx, :, :]  # [n_components, 2]
 
         # Create visualization
         fig = visualize_single_timestep(
@@ -302,7 +302,7 @@ def create_combined_visualization(positions_sequence, graph, component_sizes,
     for ax_idx, (ax, timestep) in enumerate(zip(axes, selected_timesteps)):
         # Get positions at this timestep
         idx = total_steps - timestep
-        positions = positions_sequence[idx, :, :, 0]
+        positions = positions_sequence[idx, :, :]
 
         ax.set_xlim(canvas_min - 0.1, canvas_max + 0.1)
         ax.set_ylim(canvas_min - 0.1, canvas_max + 0.1)
